@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <title>GlidePod</title>
+  <rect width="128" height="128" rx="29" fill="#315E4B"/>
+  <rect x="25" y="23" width="55" height="66" rx="16" transform="rotate(-12 52.5 56)" fill="#A2BAA7"/>
+  <rect x="45" y="43" width="58" height="61" rx="17" transform="rotate(8 74 73.5)" fill="#F3F5EB" stroke="#315E4B" stroke-width="5"/>
+  <path d="M61 59.5L79 62" stroke="#315E4B" stroke-width="4.5" stroke-linecap="round"/>
+</svg>

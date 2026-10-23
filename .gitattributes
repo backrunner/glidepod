@@ -1,0 +1,11 @@
+* text=auto
+
+# Preserve upstream notice text and pinned patch bytes verbatim.
+THIRD_PARTY_LICENSES.txt -text -whitespace
+engine/patches/*.patch -text -whitespace
+engine/patches/*-LICENSE.txt -text
+android/vulkan/licenses/*.txt -text
+
+*.png binary
+*.jpg binary
+*.axml binary

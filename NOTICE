@@ -1,0 +1,13 @@
+GlidePod
+Copyright 2026 GlidePod contributors
+
+Original GlidePod source code, documentation and artwork are licensed under
+the Apache License, Version 2.0. See LICENSE.
+
+Third-party code and notices retain their original licenses and attribution.
+See THIRD_PARTY_NOTICES.md, THIRD_PARTY_LICENSES.txt and the notices beside
+the MoltenVK patch in engine/patches/.
+
+GlidePod is an independent project. References to Android, Cuttlefish, Vulkan,
+Metal and macOS describe interoperability; they do not imply endorsement by
+their respective owners. No trademark rights are granted by this notice.

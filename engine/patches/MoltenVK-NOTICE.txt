@@ -1,0 +1,23 @@
+MoltenVK patch attribution
+
+Upstream: https://github.com/KhronosGroup/MoltenVK
+Revision: db66022459ffb663aa2b50f6b018bc2e124f5edf (v1.4.2)
+License: Apache-2.0; see MoltenVK-LICENSE.txt.
+
+The following upstream copyright notices apply to context in
+moltenvk-dynamic-triangle-fan.patch:
+
+MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm
+MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h
+MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+Copyright (c) 2015-2026 The Brenwill Workshop Ltd. (http://www.brenwill.com)
+
+MoltenVK/MoltenVK/Utility/MVKStateTracking.h
+Copyright (c) 2024-2026 Evan Tang for CodeWeavers
+
+Modifications: Copyright 2026 GlidePod contributors, Apache-2.0.
+The patch changes effective-topology tracking and dynamic triangle-fan
+conversion in the files listed above. See README.md for the behavior and
+validation scope. This notice is assembled by GlidePod from the pinned
+source headers; it is not an upstream MoltenVK NOTICE file or endorsement.

@@ -1,0 +1,94 @@
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+index 664276b..b8e8f5f 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+@@ -180,7 +180,7 @@
+ 	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
+ 
+ 	// Metal doesn't support triangle fans, so encode it as triangles via an indexed indirect triangles command instead.
+-	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
++	if (cmdEncoder->getState().vkGraphics().getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+ 		encodeIndexedIndirect(cmdEncoder);
+ 		return;
+ 	}
+@@ -453,7 +453,7 @@
+ 	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
+ 
+ 	// Metal doesn't support triangle fans, so encode it as triangles via an indexed indirect triangles command instead.
+-	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
++	if (cmdEncoder->getState().vkGraphics().getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+ 		encodeIndexedIndirect(cmdEncoder);
+ 		return;
+ 	}
+@@ -728,7 +728,7 @@
+ 	auto& dvcLimits = cmdEncoder->getDeviceProperties().limits;
+ 
+ 	// Metal doesn't support triangle fans, so encode it as indexed indirect triangles instead.
+-	if (pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
++	if (cmdEncoder->getState().vkGraphics().getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN) {
+ 		encodeIndexedIndirect(cmdEncoder);
+ 		return;
+ 	}
+@@ -1049,7 +1049,7 @@
+ 	vtxAdjmts.mtlIndexType = ibb.mtlIndexType;
+ 	vtxAdjmts.isMultiView = (cmdEncoder->getSubpass()->isMultiview() &&
+ 							 cmdEncoder->getPhysicalDevice()->canUseInstancingForMultiview());
+-	vtxAdjmts.isTriangleFan = pipeline->getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
++	vtxAdjmts.isTriangleFan = cmdEncoder->getState().vkGraphics().getVkPrimitiveTopology() == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+ #if MVK_USE_METAL_PRIVATE_API
+ 	// With private APIs for primitive restart, we need to handle disabled restart and raw Uint8 indices.
+ 	vtxAdjmts.isPrimRestart = cmdEncoder->getState().vkGraphics().isPrimitiveRestartEnabled();
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm b/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm
+index df38d4b..25134a7 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm
+@@ -549,7 +549,9 @@ void mvkPopulateFromOrFillAscending(Vec& dst, const uint32_t* pSrc, size_t count
+ #pragma mark MVKCmdSetPrimitiveTopology
+ 
+ void MVKCmdSetPrimitiveTopology::encode(MVKCommandEncoder* cmdEncoder) {
+-	cmdEncoder->getState().updateDynamicState(MVKRenderStateFlag::PrimitiveTopology)._renderState.primitiveType = mvkMTLPrimitiveTypeFromVkPrimitiveTopology(_value);
++	auto& state = cmdEncoder->getState().updateDynamicState(MVKRenderStateFlag::PrimitiveTopology)._renderState;
++	state.primitiveType = mvkMTLPrimitiveTypeFromVkPrimitiveTopology(_value);
++	state.vkPrimitiveTopology = _value;
+ }
+ 
+ 
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h
+index 25e6017..5f1baa0 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h
++++ b/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h
+@@ -197,6 +197,9 @@ struct MVKVulkanGraphicsCommandEncoderState: public MVKVulkanCommonEncoderState
+ 	uint32_t getPatchControlPoints() const {
+ 		return pickRenderState(MVKRenderStateFlag::PatchControlPoints).patchControlPoints;
+ 	}
++	VkPrimitiveTopology getVkPrimitiveTopology() const {
++		return pickRenderState(MVKRenderStateFlag::PrimitiveTopology).vkPrimitiveTopology;
++	}
+ 	bool isPrimitiveRestartEnabled() const {
+ 		return pickRenderState(MVKRenderStateFlag::PrimitiveRestartEnable).enable.has(MVKRenderStateEnableFlag::PrimitiveRestart);
+ 	}
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+index 7eae64c..7b907f1 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -875,6 +875,7 @@ static bool usesConstantColor(MVKRenderStateFlags dynamic, const VkPipelineColor
+ 	}
+ 
+ 	_staticStateData.primitiveType = mvkMTLPrimitiveTypeFromVkPrimitiveTopology(_vkPrimitiveTopology);
++	_staticStateData.vkPrimitiveTopology = _vkPrimitiveTopology;
+ 	_staticStateData.enable.set(MVKRenderStateEnableFlag::PrimitiveRestart, primitiveRestart);
+ 
+ #if MVK_USE_METAL_PRIVATE_API
+diff --git a/MoltenVK/MoltenVK/Utility/MVKStateTracking.h b/MoltenVK/MoltenVK/Utility/MVKStateTracking.h
+index ad09739..47eba6e 100644
+--- a/MoltenVK/MoltenVK/Utility/MVKStateTracking.h
++++ b/MoltenVK/MoltenVK/Utility/MVKStateTracking.h
+@@ -327,6 +327,8 @@ struct MVKRenderStateData {
+ 	uint8_t cullMode = MTLCullModeNone;
+ 	uint8_t frontFace = MTLWindingClockwise;
+ 	uint8_t primitiveType = MTLPrimitiveTypePoint;
++	// Preserve Vulkan topology: Metal maps both lists and fans to triangles.
++	VkPrimitiveTopology vkPrimitiveTopology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+ 	MVKPolygonMode polygonMode = MVKPolygonMode::Fill;
+ 	MVKLineRasterizationMode lineRasterizationMode = MVKLineRasterizationMode::Default;
+ 	MVKRenderStateEnableFlags enable;

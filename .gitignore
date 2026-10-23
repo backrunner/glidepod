@@ -1,0 +1,26 @@
+/target/
+/.cache/
+/dist/
+/evidence/*
+!/evidence/README.md
+# Keep discarded design studies local; the current editable icon is in assets/.
+/.agents/design/icon-generation/
+/.agents/design/icon-concepts/
+/.agents/design/icon-centering/
+/.agents/design/icon-composer/before-replica.icon/
+/.agents/design/icon-composer/first-pass.png
+/.agents/design/icon-composer/validation-before-slot-correction.json
+.DS_Store
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.key
+*.mobileprovision
+*.apk
+*.img
+*.qcow2
+*.dmg

@@ -1,0 +1,84 @@
+{
+  "timestamp": "2026-10-23T03:05:59.667244+00:00",
+  "source": "assets/GlidePod.icon",
+  "groups": 2,
+  "svg_layers": 5,
+  "embedded_raster_images": 0,
+  "background_fill": {
+    "solid": "srgb:0.19216,0.36863,0.29412,1.00000"
+  },
+  "design_generation": 27,
+  "exported_appearances": 6,
+  "small_sizes": [
+    16,
+    32,
+    64,
+    128
+  ],
+  "compiled_with_actool": true,
+  "ad_hoc_signature_verified_by_packaging": true,
+  "development_bundle_relaunched": true,
+  "rust_code_changed": true,
+  "rust_tests_rerun": true,
+  "background_patch": {
+    "box": [
+      220,
+      45,
+      300,
+      65
+    ],
+    "channel_ranges_rgba": [
+      [
+        59,
+        60
+      ],
+      [
+        92,
+        94
+      ],
+      [
+        76,
+        77
+      ],
+      [
+        255,
+        255
+      ]
+    ],
+    "note": "The solid source is deterministic. Apple adds system lighting and quantization, so exported pixels are not claimed to be perfectly uniform. Measurement retained from the pre-correction export; background source and material were unchanged by the slot correction."
+  },
+  "hashes": {
+    "assets/GlidePod.icon/Assets/02-front-pod.svg": "8de16155f048da787c57836ee41dc7cfbf8c86a9da7e5535625bce3ac342aef9",
+    "assets/GlidePod.icon/Assets/02-front-pod-rim.svg": "06b742833b31b4cd3bb4f4349557f178e7e6e01050792fc170ad48812abad776",
+    "assets/GlidePod.icon/Assets/01-rear-pod.svg": "af6e40a2cf10175e71d4fd0f359c2181f04f0f45bd63e2dfe615202e9bc36c18",
+    "assets/GlidePod.icon/Assets/03-package-slot.svg": "db5e3af08c76ed14d6fec677024504f2844525ffca893c3e2d75a856975aaa90",
+    "assets/GlidePod.icon/Assets/01-rear-pod-rim.svg": "7ff45ecc02baf68ee2687e6fe9e6e2e8218e095cd3a21f7c84cd99af9ffc3fa3",
+    "assets/GlidePod.icon/icon.json": "36023680be324ce8ae17c6d12ff3b4f76c3b3d0430b22dccd58998301b2a8527",
+    "dist/GlidePod.app/Contents/Resources/Assets.car": "7d06968ceca4f2bdeeca7d9ce4813d2ad7592e6a4a27e4e6270042f8413929a6",
+    "dist/GlidePod.app/Contents/Resources/GlidePod.icns": "4500fc59f999204799c712bb5dfea12898258435273330190e5c904e62d570e1",
+    "dist/GlidePod.app/Contents/MacOS/glidepod": "65eeb1b36b06835135cd6980b8c6511dc9985cb24d53ce50a547fede9c27d343",
+    "dist/GlidePod.app/Contents/MacOS/glidepodctl": "7150a93439d35f3d9d96fee2b5beadfb37ca8ed2717e48a902f5626042b85eed"
+  },
+  "slot_geometry": {
+    "front_square": [
+      366,
+      366,
+      440,
+      440
+    ],
+    "slot": [
+      456,
+      481,
+      172,
+      34
+    ],
+    "center_relative": [
+      0.4,
+      0.3
+    ],
+    "rotation_degrees": 12
+  },
+  "native_window_visual_verification_after_slot_correction": false,
+  "native_verification_note": "Desktop tools could not access operable windows, including Finder. User confirmed that desktop unlock is currently unavailable and asked to preserve the build.",
+  "rust_tests_passed": 29
+}

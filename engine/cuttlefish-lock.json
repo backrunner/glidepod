@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "purpose": "local Android boot experiment; not a release image",
+  "branch": "aosp-android-latest-release",
+  "build_id": "16644040",
+  "target": "aosp_cf_arm64_only_phone-userdebug",
+  "build_created": "2026-10-18T15:03:21.021Z",
+  "artifacts": [
+    {
+      "name": "android-info.txt",
+      "bytes": 83,
+      "api_md5": "56ef99a2c5e2080ee1f9cbce6aab4a7e",
+      "sha256": "9e65df4d6461e776a29250602980d7f9fbc3d4e12cf66af759dcc38df02b33ee"
+    },
+    {
+      "name": "aosp_cf_arm64_only_phone-img-16644040.zip",
+      "bytes": 1101174958,
+      "api_md5": "21542c7cbc096a76d91b723c17ea391f",
+      "sha256": "a9314183f3cf4d15a0a2121a85f8300ca7990788c52474d322c6fe9320b40802"
+    },
+    {
+      "name": "manifest_16644040.xml",
+      "bytes": 169123,
+      "api_md5": "b3a6e0f1bc95a05af277a13bf5dd2b8c",
+      "sha256": "c9eaff434f26ee3769e1c47dbf92c157759c70e0d8bae12fd581e6cd575845f0"
+    }
+  ],
+  "sha256_provenance": "Locally measured from the first size/MD5-checked download over Google HTTPS; not a publisher signature"
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "status": "experimental-external-renderer",
+  "moltenvk": {
+    "repository": "https://github.com/KhronosGroup/MoltenVK.git",
+    "tag": "v1.4.2",
+    "revision": "db66022459ffb663aa2b50f6b018bc2e124f5edf",
+    "private_metal_api": true,
+    "patch": "engine/patches/moltenvk-dynamic-triangle-fan.patch",
+    "patch_sha256": "3112ce5f4fa51fd62fe1f8c477ca4a47367c730345b2b70ecdc9097fb0573412",
+    "dependencies": {
+      "SPIRV-Cross": "6c09849fe88c48eaed08413aa022aaa136a3a057",
+      "Vulkan-Headers": "e3b1eec08173d6b825cd3ac88c885a63b621504a",
+      "cereal": "a56bad8bbb770ee266e930c95d37fff2a5be7fea"
+    }
+  },
+  "cpm": {
+    "url": "https://github.com/cpm-cmake/CPM.cmake/releases/download/v0.40.8/CPM.cmake",
+    "sha256": "78ba32abdf798bc616bab7c73aac32a17bbd7b06ad9e26a6add69de8f3ae4791"
+  },
+  "base_renderer": {
+    "gfxstream_revision": "ec3143b4ac345af198b3f5690bfc79c728128704",
+    "loader_tag": "v1.4.365",
+    "files": [
+      {
+        "path": "lib64/libgfxstream_backend.dylib",
+        "bytes": 6270832,
+        "sha256": "3aad31ff506f43290053fecdebb60bcb1d3fa316761565f7fbb829099cc0b86e"
+      },
+      {
+        "path": "lib64/vulkan/libvulkan.dylib",
+        "bytes": 631904,
+        "sha256": "5ba53b37db0d0bdf8c04ccbffaf7dc1312543381b65b14bcbd8feb116fdf4d91"
+      },
+      {
+        "path": "lib64/vulkan/MoltenVK_icd.json",
+        "bytes": 179,
+        "sha256": "578ff08cd0d8734619357541771a5abc9c3470ca300030219a971a9e9dbbe466"
+      }
+    ]
+  },
+  "platform": "arm64-macos",
+  "deployment_target": "15.0",
+  "full_conformance_qualified": false,
+  "games_qualified": false
+}

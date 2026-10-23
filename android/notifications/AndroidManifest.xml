@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.glidepod.notifications" android:versionCode="1" android:versionName="1.0">
+  <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="36"/>
+  <queries><intent><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent></queries>
+  <application android:label="GlidePod Notifications" android:allowBackup="false">
+    <service android:name=".Listener" android:label="GlidePod" android:exported="true" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+      <intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter>
+    </service>
+    <provider android:name=".Bridge" android:authorities="dev.glidepod.notifications.bridge" android:exported="true" android:permission="android.permission.DUMP"/>
+  </application>
+</manifest>

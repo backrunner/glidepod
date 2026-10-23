@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/glidepodctl", "crates/glidepod-ui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.90"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+sha2 = "0.10"
+libc = "0.2"
+tempfile = "3"
+glidepod-core = { path = "crates/glidepod-core" }
+glidepod-protocol = { path = "crates/glidepod-protocol" }
+glidepod-macos = { path = "crates/glidepod-macos" }
+glidepod-runtime = { path = "crates/glidepod-runtime" }
+glidepod-installer = { path = "crates/glidepod-installer" }
+
+[profile.dev]
+debug = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+# Image verification reads gigabytes; keep the compression primitive optimized in dev builds.
+[profile.dev.package.sha2]
+opt-level = 3
+
+# App windows copy and convert millions of pixels per frame. Keep the real presentation
+# hot path optimized even in the development bundle, while retaining debug assertions.
+[profile.dev.package.glidepod-runtime]
+opt-level = 3

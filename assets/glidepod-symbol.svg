@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="14 13 100 100" fill="none">
+  <title>GlidePod monochrome symbol</title>
+  <defs>
+    <mask id="rear"><rect width="128" height="128" fill="white"/><rect x="45" y="43" width="58" height="61" rx="17" transform="rotate(8 74 73.5)" fill="black" stroke="black" stroke-width="7"/></mask>
+    <mask id="front"><rect width="128" height="128" fill="white"/><path d="M61 59.5 79 62" stroke="black" stroke-width="4.5" stroke-linecap="round"/></mask>
+  </defs>
+  <g mask="url(#rear)"><rect x="25" y="23" width="55" height="66" rx="16" transform="rotate(-12 52.5 56)" fill="#315E4B"/></g>
+  <g mask="url(#front)"><rect x="45" y="43" width="58" height="61" rx="17" transform="rotate(8 74 73.5)" fill="#315E4B"/></g>
+</svg>

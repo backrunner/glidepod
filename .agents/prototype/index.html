@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>GlidePod — interactive product prototype</title>
+  <link rel="icon" type="image/svg+xml" href="assets/glidepod-icon.svg">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="controls.css">
+</head>
+<body>
+  <header class="macbar"><div><img class="brand-mark small" src="assets/glidepod-icon.svg" alt=""><strong>GlidePod</strong></div><div><span class="demo-badge">Interactive prototype</span><button id="theme-button" class="bar-button" aria-label="Toggle appearance"></button><span class="menutext">Fri 23 Oct · 9:41</span></div></header>
+  <main id="center" class="center-window" aria-label="GlidePod management center">
+    <aside class="sidebar">
+      <div class="traffic" aria-label="Window controls"><button class="red" data-action="hide-center" aria-label="Close management center"></button><button class="yellow" data-action="hide-center" aria-label="Minimize management center"></button><button class="green" data-action="expand-center" aria-label="Expand management center"></button></div>
+      <div class="wordmark"><img class="brand-mark" src="assets/glidepod-icon.svg" alt=""><div><strong>GlidePod</strong><small>Android for macOS</small></div></div>
+      <nav id="navigation" aria-label="Main navigation"></nav>
+      <div class="sidebar-bottom"><div class="runtime-mini" id="runtime-mini"></div><button class="plain sidebar-link" data-action="setup"><span>Setup preview</span></button><a class="sidebar-link" href="../README.md" target="_blank" rel="noopener"><span>Design documentation</span></a></div>
+    </aside>
+    <section class="workspace"><header class="toolbar"><div><span class="breadcrumb" id="profile-label">Personal</span><span class="slash">/</span><strong id="page-label">Apps</strong></div><div class="toolbar-actions"><button class="button toolbar-secondary" data-action="entries" title="Mac app entries" aria-label="Mac app entries"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg><span>Mac apps</span></button><button class="button primary" data-action="install"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Install APK <kbd>⌘O</kbd></button></div></header><div id="page" class="page"></div></section>
+  </main>
+  <section id="android-windows" aria-label="Android application windows"></section>
+  <section id="widget-panels" aria-label="Live Android widget panels"></section>
+  <div id="dock" class="dock" aria-label="Desktop dock"></div>
+  <div class="preview-controls"><button data-action="show-center">Management center</button><button data-action="desktop">Desktop</button><button data-action="entries">Mac app entries</button><button data-action="reset">Reset demo</button></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+  <input type="file" id="apk-file" accept=".apk" hidden>
+  <script src="app.js"></script>
+</body>
+</html>

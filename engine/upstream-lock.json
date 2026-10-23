@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/nizwar/avo.git",
+  "revision": "99153258763a9ccdf5d4c6de36bd631e4dd0dded",
+  "status": "evaluation-only-not-linked-or-redistributed",
+  "root_license": "Apache-2.0",
+  "engine_declared_license": "BSD-3-Clause",
+  "license_scope_resolved": false,
+  "graphics_candidate": {
+    "gfxstream_revision": "ec3143b4ac345af198b3f5690bfc79c728128704",
+    "vulkan_tag": "v1.4.365",
+    "moltenvk_version": "1.4.0",
+    "moltenvk_input": "upstream release binary; not a source-built artifact",
+    "moltenvk_archive_sha256": "f4feaf6a4988352de8e6d49874ccc1cd6a45021e3cb476e8531bef7ecc73e93a",
+    "qualified": false
+  },
+  "blocked_adaptations": [
+    "Do not advertise VK_EXT_provoking_vertex when last-vertex behavior is unsupported.",
+    "Audit native_astc capability overrides against actual format support.",
+    "Keep readback measurable; do not label transfer_read_iov zero-copy."
+  ]
+}
