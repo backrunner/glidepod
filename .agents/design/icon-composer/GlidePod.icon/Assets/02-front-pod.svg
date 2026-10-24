@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><g transform="translate(512 512) scale(1.07) translate(-512 -512)">
-<defs><linearGradient id="face" x1="0" y1="0" x2="0.35" y2="1"><stop stop-color="#F3F5EB" stop-opacity="0.88"/><stop offset="0.52" stop-color="#F3F5EB" stop-opacity="0.50"/><stop offset="1" stop-color="#F3F5EB" stop-opacity="0.72"/></linearGradient></defs>
+<defs><linearGradient id="face" x1="0" y1="0" x2="0.35" y2="1"><stop stop-color="#E8F6EC" stop-opacity="0.96"/><stop offset="0.52" stop-color="#E8F6EC" stop-opacity="0.72"/><stop offset="1" stop-color="#E8F6EC" stop-opacity="0.88"/></linearGradient></defs>
   <title>Front ivory glass package with opening</title>
   <path transform="rotate(12 586 586)" fill="url(#face)" fill-rule="evenodd" d="M454 366H718A88 88 0 0 1 806 454V718A88 88 0 0 1 718 806H454A88 88 0 0 1 366 718V454A88 88 0 0 1 454 366Z M473 481H611A17 17 0 0 1 628 498A17 17 0 0 1 611 515H473A17 17 0 0 1 456 498A17 17 0 0 1 473 481Z"/>
 </g></svg>

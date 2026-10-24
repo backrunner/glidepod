@@ -1,5 +1,8 @@
 <p align="center">
-  <img src=".agents/media/glidepod-icon.png" width="128" height="128" alt="GlidePod's two overlapping glass packages">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/glidepod-icon-dark.png">
+    <img src="assets/brand/glidepod-icon-light.png" width="128" height="128" alt="GlidePod's two overlapping glass packages">
+  </picture>
 </p>
 
 <h1 align="center">GlidePod</h1>

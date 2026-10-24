@@ -3,7 +3,7 @@
     "specular-location"
   ],
   "fill": {
-    "solid": "srgb:0.19216,0.36863,0.29412,1.00000"
+    "solid": "srgb:0.12549,0.54510,0.43922,1"
   },
   "groups": [
     {
@@ -42,7 +42,7 @@
             {
               "appearance": "dark",
               "value": {
-                "solid": "srgb:0.95294,0.96078,0.92157,0.58"
+                "solid": "srgb:0.96471,1,0.96471,0.82"
               }
             }
           ]
@@ -56,7 +56,7 @@
       },
       "shadow": {
         "kind": "neutral",
-        "opacity": 0.18
+        "opacity": 0.1
       },
       "specular": "inside",
       "translucency": {
@@ -87,7 +87,7 @@
             {
               "appearance": "dark",
               "value": {
-                "solid": "srgb:0.63529,0.72941,0.65490,0.62"
+                "solid": "srgb:0.73725,0.92157,0.82745,0.72"
               }
             }
           ]
@@ -101,13 +101,44 @@
       },
       "shadow": {
         "kind": "neutral",
-        "opacity": 0.18
+        "opacity": 0.1
       },
       "translucency": {
         "enabled": false,
         "value": 0.3
       },
       "specular": "inside"
+    },
+    {
+      "name": "00 Emerald background",
+      "layers": [
+        {
+          "name": "Radial gradient",
+          "image-name": "00-gradient-background.png",
+          "glass": false,
+          "fill-specializations": [
+            {
+              "appearance": "dark",
+              "value": {
+                "solid": "srgb:0.06,0.25,0.21,1"
+              }
+            }
+          ]
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0
+      },
+      "refractivity": {
+        "enabled": false,
+        "depth": 0,
+        "strength": 0
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
     }
   ],
   "supported-platforms": {

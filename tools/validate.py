@@ -6,10 +6,31 @@ import json
 import plistlib
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "evidence/g0"
+
+def validate_icons(bundle):
+    """Catch missing Retina exports or a return to actool's partial ICNS."""
+    for appearance in ("light", "dark"):
+        for scale in (1, 2, 3):
+            name = f"glidepod-sidebar-{appearance}@{scale}x.png"
+            source = (ROOT / "assets/brand" / name).read_bytes()
+            assert source[:8] == b"\x89PNG\r\n\x1a\n"
+            assert struct.unpack(">II", source[16:24]) == (40 * scale, 40 * scale), name
+            assert source == (ROOT / ".agents/prototype/assets" / name).read_bytes(), name
+    icon = (bundle / "Resources/GlidePod.icns").read_bytes()
+    assert icon[:4] == b"icns" and struct.unpack(">I", icon[4:8])[0] == len(icon)
+    offset, chunks = 8, set()
+    while offset < len(icon):
+        kind, size = struct.unpack(">4sI", icon[offset:offset + 8])
+        assert size >= 8 and offset + size <= len(icon)
+        chunks.add(kind)
+        offset += size
+    # Retina representations for 16, 32, 128, 256 and 512 points.
+    assert {b"ic11", b"ic12", b"ic13", b"ic14", b"ic10"} <= chunks, chunks
 
 def run(name, *command, expected=0):
     result = subprocess.run([*map(str, command)], cwd=ROOT, capture_output=True, text=True)
@@ -52,6 +73,7 @@ def main():
     assert info["CFBundleIconName"] == "GlidePod" and info["CFBundleIconFile"] == "GlidePod"
     for resource in ("Assets.car", "GlidePod.icns"):
         assert (bundle / "Resources" / resource).stat().st_size > 1024
+    validate_icons(bundle)
     run("helper-entitlements", "codesign", "-d", "--entitlements", ":-", helper)
     run("ui-entitlements", "codesign", "-d", "--entitlements", ":-", "dist/GlidePod.app")
     run("deployment-target", "vtool", "-show-build", "dist/GlidePod.app/Contents/MacOS/glidepod")

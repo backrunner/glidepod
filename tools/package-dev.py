@@ -34,11 +34,23 @@ def main():
     icon_work = ROOT / ".cache/icon-compiled"
     icon_work.mkdir(parents=True, exist_ok=True)
     # Preserve Apple's layered icon and appearance renditions in Assets.car.
-    # actool also emits an ICNS fallback for older macOS versions.
+    # actool emits only a partial ICNS. Build the full 1x/2x fallback from the
+    # catalog's native renditions, including 512pt @2x (1024 physical pixels).
     run("xcrun", "actool", ROOT / "assets/GlidePod.icon", "--compile", icon_work,
         "--platform", "macosx", "--minimum-deployment-target", "15.0",
         "--app-icon", "GlidePod", "--output-partial-info-plist", icon_work / "partial.plist",
         "--output-format", "human-readable-text", "--notices", "--warnings")
+    icon_bundle = icon_work / "GlidePodIcons.bundle"
+    icon_resources = icon_bundle / "Contents/Resources"
+    icon_resources.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(icon_work / "Assets.car", icon_resources / "Assets.car")
+    with (icon_bundle / "Contents/Info.plist").open("wb") as file:
+        plistlib.dump({"CFBundleIdentifier": "dev.glidepod.icon-export", "CFBundlePackageType": "BNDL"}, file)
+    icon_exporter = icon_work / "export-app-icon"
+    run("xcrun", "swiftc", ROOT / "macos/packaging/ExportAppIcon.swift", "-o", icon_exporter)
+    iconset = icon_work / "GlidePod.iconset"
+    run(icon_exporter, icon_bundle, iconset)
+    run("iconutil", "-c", "icns", iconset, "-o", icon_work / "GlidePod.icns")
     for name in ("Assets.car", "GlidePod.icns"):
         shutil.copy2(icon_work / name, resources / name)
     shutil.copy2(ROOT / "LICENSE", resources / "LICENSE")
@@ -62,6 +74,9 @@ def main():
     run("codesign", "--force", "--sign", "-", "--entitlements", ROOT / "macos/packaging/hypervisor.entitlements", macos / "glidepodctl")
     run("codesign", "--force", "--sign", "-", bundle)
     run("codesign", "--verify", "--deep", "--strict", bundle)
+    # Contents changes alone do not update the app directory's modification time.
+    # Let Launch Services see a rebuilt development bundle and its new icon.
+    bundle.touch()
     print(bundle)
 
 if __name__ == "__main__":
