@@ -41,6 +41,7 @@ pub enum Action {
 }
 pub enum Update {
     Ready,
+    Closed,
     Error(String),
     Clipboard(String),
 }
@@ -178,7 +179,12 @@ impl WindowInput {
                         }
                     }
                     if heartbeat.elapsed() >= Duration::from_millis(250) {
-                        input.lock().unwrap().send(InputEvent::Ping)?;
+                        let mut session = input.lock().unwrap();
+                        session.send(InputEvent::Ping)?;
+                        if !session.task_present {
+                            let _ = tx.send(Update::Closed);
+                            break;
+                        }
                         heartbeat = Instant::now();
                     }
                 }
@@ -390,6 +396,7 @@ mod tests {
                     Update::Ready => return Ok(()),
                     Update::Error(e) => anyhow::bail!(e),
                     Update::Clipboard(_) => {}
+                    Update::Closed => anyhow::bail!("App task closed unexpectedly"),
                 }
             }
         };

@@ -4,6 +4,10 @@ use glidepod_runtime::{
     input::{GamepadState, InputEvent},
 };
 use gpui::{prelude::*, *};
+use gpui_component::{
+    Icon, Sizable,
+    button::{Button, ButtonVariants},
+};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, atomic::Ordering},
@@ -17,6 +21,7 @@ pub struct AndroidWindow {
     retired: Vec<Arc<RenderImage>>,
     error: Option<String>,
     frame_error: Option<String>,
+    closed: bool,
     focus: FocusHandle,
     width: u32,
     height: u32,
@@ -128,6 +133,7 @@ impl AndroidWindow {
                         while let Ok(update) = this.input.updates.try_recv() {
                             match update {
                                 Update::Ready => this.error = None,
+                                Update::Closed => this.closed = true,
                                 Update::Error(e) => this.error = Some(e),
                                 Update::Clipboard(t) => {
                                     cx.write_to_clipboard(ClipboardItem::new_string(t))
@@ -171,6 +177,7 @@ impl AndroidWindow {
             retired: Vec::new(),
             error: None,
             frame_error: None,
+            closed: false,
             focus,
             width,
             height,
@@ -394,6 +401,11 @@ impl AndroidWindow {
 }
 impl Render for AndroidWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.closed {
+            window.remove_window();
+        }
+        let dark = gpui_component::Theme::global(cx).mode.is_dark();
+        let colors = crate::palette(dark);
         for image in self.retired.drain(..) {
             let _ = window.drop_image(image);
         }
@@ -507,6 +519,8 @@ impl Render for AndroidWindow {
                         },
                     )
                     .absolute()
+                    .top_0()
+                    .left_0()
                     .size_full(),
                 ),
         )
@@ -516,10 +530,31 @@ impl Render for AndroidWindow {
                 .w_full()
                 .px(px(10.))
                 .text_size(px(11.))
-                .text_color(rgb(0xb5bdb5))
+                .bg(rgb(colors.side))
+                .text_color(rgb(colors.muted))
                 .flex()
                 .gap(px(14.))
                 .items_center()
+                .child(
+                    Button::new("android-back")
+                        .small()
+                        .ghost()
+                        .icon(Icon::default().path("icons/back.svg"))
+                        .tooltip("Android Back")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            window.activate_window();
+                            window.focus(&this.focus);
+                            this.reset();
+                            for down in [true, false] {
+                                this.send(Action::Device(InputEvent::Key {
+                                    code: 4,
+                                    down,
+                                    meta: 0,
+                                }));
+                            }
+                            cx.notify();
+                        })),
+                )
                 .child(
                     div()
                         .id("keyboard-mode")

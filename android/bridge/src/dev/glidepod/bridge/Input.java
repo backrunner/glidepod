@@ -188,7 +188,14 @@ public final class Input {
         try {
             String line;
             while((line=line(System.in))!=null) {
-                try {input.command(new JSONObject(line)); System.out.println("{\"ok\":true}");}
+                try {
+                    JSONObject request = new JSONObject(line);
+                    input.command(request);
+                    JSONObject reply = new JSONObject().put("ok", true);
+                    if (request.getString("op").equals("ping"))
+                        reply.put("task_present", Tasks.query(input.display, input.packageName, false) > 0);
+                    System.out.println(reply);
+                }
                 catch(Exception e) {System.out.println(new JSONObject().put("error",e.toString()+" "+String.valueOf(e.getCause()))); break;}
                 finally {System.out.flush();}
             }

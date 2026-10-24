@@ -169,6 +169,22 @@ fn logical_display(displays: &str, unique: &str) -> Option<u32> {
         .ok()
 }
 impl AppWindow {
+    /// Count only this package's tasks on its leased display, never the default display.
+    pub fn task_count(&self) -> Result<usize> {
+        let reply = self.guest.bridge(
+            "dev.glidepod.bridge.Tasks",
+            &[
+                "count",
+                &self.info.display_id.to_string(),
+                &self.info.package_id,
+            ],
+        )?;
+        let value: serde_json::Value = serde_json::from_str(reply.trim())?;
+        value["count"]
+            .as_u64()
+            .map(|n| n as usize)
+            .context("Invalid task count")
+    }
     /// Display-targeted input avoids the global keyboard and touch device focus race.
     pub fn tap(&self, x: u32, y: u32) -> Result<()> {
         ensure!(
@@ -306,6 +322,18 @@ impl AppWindow {
 }
 impl Drop for AppWindow {
     fn drop(&mut self) {
+        // Removing a display alone reparents its Android tasks to another display.
+        // Finish only our package's task first; preserve app data and background services.
+        if self.info.display_id != 0 {
+            let _ = self.guest.bridge(
+                "dev.glidepod.bridge.Tasks",
+                &[
+                    "close",
+                    &self.info.display_id.to_string(),
+                    &self.info.package_id,
+                ],
+            );
+        }
         let _ = control(&self.guest, &format!("display {} off", self.info.scanout));
     }
 }

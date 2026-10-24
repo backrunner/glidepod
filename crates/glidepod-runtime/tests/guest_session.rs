@@ -114,7 +114,20 @@ fn real_guest_app_lifecycle() -> Result<()> {
     let after = capture(&a, out.join("input-after.ppm"), before.sequence)?;
     ensure!(before.rgba != after.rgba, "Tap did not change the frame");
     capture(&b, out.join("second-display.ppm"), 0)?;
+    ensure!(
+        a.task_count()? == 1 && b.task_count()? == 1,
+        "Owned tasks missing"
+    );
     drop(a);
+    let activities = guest.developer_shell("dumpsys activity activities", false)?;
+    ensure!(
+        !activities.contains("dev.glidepod.fixture/.MainActivity"),
+        "Closed fixture task survived display removal"
+    );
+    ensure!(
+        b.task_count()? == 1,
+        "Closing one window removed another app's task"
+    );
     drop(b);
     if guest
         .catalog()?
@@ -136,6 +149,22 @@ fn real_guest_app_lifecycle() -> Result<()> {
     let restored = guest.open_app("dev.glidepod.widgets", 720, 1080)?;
     thread::sleep(Duration::from_secs(1));
     capture(&restored, out.join("widget-restored.ppm"), 0)?;
+    let restored = std::sync::Arc::new(restored);
+    let mut input = restored.open_input()?;
+    restored.key(4)?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        input.send(glidepod_runtime::input::InputEvent::Ping)?;
+        if !input.task_present {
+            break;
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "Back did not report task completion"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+    drop(input);
     drop(restored);
     guest.uninstall("dev.glidepod.fixture")?;
     ensure!(
@@ -147,7 +176,7 @@ fn real_guest_app_lifecycle() -> Result<()> {
     );
     guest.install(&apk, None)?;
     guest.catalog()?;
-    let report = serde_json::json!({"epoch":guest.endpoints.epoch,"renderer":store.runtime_status()?.effective_renderer,"checks":["install","update","reviewed-hash rejection","unsigned APK rejection","system uninstall rejection","catalog and icon extraction","root shortcut policy and uid","simultaneous independent displays","duplicate app window rejection","display-targeted text and pointer input","widget picker, binding and restore captures","Unicode selection and clipboard round-trip","uninstall and reinstall"],"native_ui_buttons_verified":false,"game_compatibility_qualified":false});
+    let report = serde_json::json!({"epoch":guest.endpoints.epoch,"renderer":store.runtime_status()?.effective_renderer,"checks":["install","update","reviewed-hash rejection","unsigned APK rejection","system uninstall rejection","catalog and icon extraction","root shortcut policy and uid","simultaneous independent displays","duplicate app window rejection","close removes only owned task","Back reports task completion","display-targeted text and pointer input","widget picker, binding and restore captures","Unicode selection and clipboard round-trip","uninstall and reinstall"],"native_ui_buttons_verified":false,"game_compatibility_qualified":false});
     fs::write(
         out.join("app-session.json"),
         serde_json::to_vec_pretty(&report)?,

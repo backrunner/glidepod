@@ -99,6 +99,7 @@ pub struct InputSession {
     stream: Adb,
     pending: Vec<u8>,
     pub gamepad_device: i32,
+    pub task_present: bool,
     failed: bool,
 }
 impl AppWindow {
@@ -134,6 +135,7 @@ impl AppWindow {
             stream,
             pending: Vec::new(),
             gamepad_device: -1,
+            task_present: true,
             failed: false,
         };
         let ready = session.reply()?;
@@ -180,6 +182,9 @@ impl InputSession {
             self.stream.write_all(&data)?;
             let reply = self.reply()?;
             ensure!(reply["ok"] == true, "Android input failed: {reply}");
+            if let Some(present) = reply["task_present"].as_bool() {
+                self.task_present = present;
+            }
             Ok(())
         })();
         if result.is_err() {
