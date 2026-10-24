@@ -34,6 +34,10 @@ pub struct Configuration {
     pub audio_enabled: bool,
     #[serde(default)]
     pub notifications_enabled: bool,
+    #[serde(default)]
+    pub recent_personal: Vec<String>,
+    #[serde(default)]
+    pub recent_developer: Vec<String>,
 }
 impl Default for Configuration {
     fn default() -> Self {
@@ -46,10 +50,27 @@ impl Default for Configuration {
             dark_mode: false,
             audio_enabled: true,
             notifications_enabled: false,
+            recent_personal: Vec::new(),
+            recent_developer: Vec::new(),
         }
     }
 }
 impl Configuration {
+    pub fn recent_apps(&self) -> &[String] {
+        match self.active_profile {
+            ProfileId::Personal => &self.recent_personal,
+            ProfileId::Developer => &self.recent_developer,
+        }
+    }
+    pub fn record_opened_app(&mut self, package: &str) {
+        let recent = match self.active_profile {
+            ProfileId::Personal => &mut self.recent_personal,
+            ProfileId::Developer => &mut self.recent_developer,
+        };
+        recent.retain(|p| p != package);
+        recent.insert(0, package.into());
+        recent.truncate(20);
+    }
     pub fn settings(&self) -> &ProfileSettings {
         match self.active_profile {
             ProfileId::Personal => &self.personal,
@@ -384,6 +405,39 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("symlink escapes")
+        );
+    }
+    #[test]
+    fn recent_apps_persist_in_open_order_without_crossing_profiles() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().to_path_buf()).unwrap();
+        store
+            .update(0, |c| {
+                c.record_opened_app("dev.example.first");
+                c.record_opened_app("dev.example.second");
+                c.record_opened_app("dev.example.first");
+            })
+            .unwrap();
+        let config = store.load().unwrap();
+        assert_eq!(
+            config.recent_apps(),
+            &["dev.example.first", "dev.example.second"]
+        );
+        store
+            .update(config.revision, |c| {
+                c.active_profile = ProfileId::Developer;
+                assert!(c.recent_apps().is_empty());
+                for i in 0..25 {
+                    c.record_opened_app(&format!("dev.example.app{i}"));
+                }
+            })
+            .unwrap();
+        let config = store.load().unwrap();
+        assert_eq!(config.recent_apps().len(), 20);
+        assert_eq!(config.recent_apps()[0], "dev.example.app24");
+        assert_eq!(
+            config.recent_personal,
+            ["dev.example.first", "dev.example.second"]
         );
     }
     #[test]

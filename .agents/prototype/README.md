@@ -10,11 +10,11 @@ Visit `http://127.0.0.1:4318/prototype/`. There is no dependency install or buil
 
 ## Suggested walkthrough
 
-1. **Apps:** search for Sunday, filter Games, inspect an app using its three-dot button, then return to All apps.
+1. **Apps:** the library contains user-installed apps only; Android system apps and GlidePod service components are excluded. Search for Sunday, filter Games, inspect an app using its three-dot button, then return to All apps.
 2. **Desktop:** choose “Preview app windows.” Field Notes and Alpine Rally open as separate sample windows. Drag their title bars, resize from the bottom-right corner, minimize and restore from the dock, or expand with the green control. Enter a note and press Return. The game has arrow-key controls; Escape releases capture.
 3. **Install:** return to the management center and choose Install APK. Use the sample APK, or choose/drop a local `.apk`. The browser only reads its name and size. Select unsupported ABI, signer mismatch or low storage to see blocking states; choose the success scenario to install Field Journal into the sample library.
 4. **Finder:** use “Preview Finder install,” then double-click the sample file. The same installer opens. A single-click alternative is provided for keyboard/touch accessibility.
-5. **Mac entries:** choose “Mac apps” in the window toolbar. Open a sample app from the simulated application grid. Disable entries in Settings and check the unavailable state.
+5. **Mac entries:** choose “Mac app entries” in the preview controls below the window. Open a sample app from the simulated application grid. Disable entries in Settings and check the unavailable state.
 6. **Runtime:** open Android. Stop closes sample windows; Start brings the runtime back. Switch to Developer to see a separate sample app set. Enable root shell and confirm the restart; return to Personal to see root off and its preserved app set.
 7. **Graphics:** select Software. The pending change is applied on restart. Simulate GPU failure and use either restart or software recovery in the affected game window.
 8. **Widgets:** add Daylight to the desktop. Stop Android to see a paused preview. Use its Start action to resume. Native Mac widget preview explains the separate WidgetKit surface.
@@ -49,7 +49,7 @@ The subdued green palette, compact controls, restrained separators and native-st
 
 ## Refined controls and icon
 
-See [UI refinement](ui-refinement.md) for the compact management layout, control behavior and icon rationale. The original graphical mark is available as [SVG](assets/glidepod-icon.svg), with a [monochrome symbol](assets/glidepod-symbol.svg) and [size/background preview](assets/icon-preview.html). It replaces the lettermark throughout the prototype.
+See [UI refinement](ui-refinement.md) for the compact management layout, control behavior and icon rationale. The current glass package icon is exported from the [editable Icon Composer master](../../assets/GlidePod.icon) into [light](assets/glidepod-icon-light.png) and [dark](assets/glidepod-icon-dark.png) renditions. The sidebar, dock, menu bar and favicon use these assets and follow the prototype appearance. See the [size/background preview](assets/icon-preview.html). Older SVG artwork remains historical source.
 
 ## Screenshots from the running prototype
 

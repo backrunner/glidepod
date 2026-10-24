@@ -31,3 +31,14 @@ The source is scalable vector artwork integrated in the sidebar, dock, menu bar 
 ## Files and native implementation
 
 `controls.css` contains the refinement layer; `styles.css` retains the desktop and fictional guest scenes. `app.js` owns prototype interactions. The native GPUI implementation should translate these dimensions and states into shared control components, using AppKit hooks where required for text input, focus, accessibility and host integration. Browser focus testing does not establish native IME or VoiceOver correctness.
+
+## Current icon integration — 2026-10-24
+
+The later five-layer Icon Composer design supersedes the flat SVG mark described above. The native application icon is compiled from `assets/GlidePod.icon`; the sidebar, prototype (including dock/menu bar/favicon), README and icon preview now use matching light/dark raster exports from that master. `tools/export-icons.py` regenerates the interface images and the self-contained prototype copies together. The old vectors are retained as historical artwork, not active UI assets.
+
+The latest icon refinement uses a restrained emerald radial background with a softly lit center and darker perimeter, jade/ivory glass faces with reduced highlights, and a darker opening. It retains the selected geometry and native layered icon. The sidebar uses dedicated 1x/2x/3x assets; other browser contexts use the 256-pixel preview. Background parameters live in `assets/icon-background.json`, and both the native bundle and this prototype are exported from the same master.
+
+
+## Library simplification — 2026-10-24
+
+The app library shows user-installed applications only, excluding Android system apps and GlidePod's input, widget and notification helpers. Search, counts, Games, Recent and Running share that visibility rule. Runtime status stays on the Android page; the duplicate sidebar footer is removed. The global “Mac apps” toolbar action is removed; creating a Mac shortcut remains an explicit per-app action in the native details view. The prototype's simulated entry browser stays in its external preview controls. Settings uses a centered eight-tooth gear with the same visual size as the other navigation icons.

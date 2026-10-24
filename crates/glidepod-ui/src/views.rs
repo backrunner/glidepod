@@ -1,6 +1,17 @@
 //! Compact macOS management views. Runtime capabilities are never inferred from preferences.
 use super::*;
+use crate::controls::{Switch, segmented};
 use gpui_component::TitleBar;
+
+// Keep the full runtime catalog available for widget/settings operations, while
+// every library view and its search/counts use only user-facing installed apps.
+fn is_library_app(app: &glidepod_runtime::guest::AndroidApp) -> bool {
+    !app.system
+        && !matches!(
+            app.package_id.as_str(),
+            "dev.glidepod.input" | "dev.glidepod.widgets" | "dev.glidepod.notifications"
+        )
+}
 
 impl Center {
     fn caption(&self, text: impl Into<SharedString>) -> Div {
@@ -11,6 +22,10 @@ impl Center {
     }
 
     fn group(&self) -> Div {
+        div().w_full()
+    }
+
+    fn card(&self) -> Div {
         let p = palette(self.config.dark_mode);
         div()
             .w_full()
@@ -22,13 +37,15 @@ impl Center {
     }
 
     fn section(&self, title: &'static str, content: impl IntoElement) -> Div {
-        div()
-            .mb(px(22.))
+        self.card()
+            .p(px(18.))
+            .mb(px(16.))
             .child(
                 div()
-                    .mb(px(9.))
+                    .mb(px(6.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_size(px(12.))
+                    .text_size(px(13.))
+                    .line_height(px(16.))
                     .child(title),
             )
             .child(content)
@@ -36,196 +53,401 @@ impl Center {
 
     fn row(&self, label: &'static str, control: impl IntoElement) -> Div {
         div()
-            .min_h(px(46.))
-            .px(px(14.))
-            .py(px(10.))
+            .py(px(14.))
             .flex()
             .items_center()
             .justify_between()
-            .gap(px(20.))
-            .child(div().flex_shrink_0().child(label))
+            .gap(px(18.))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_weight(FontWeight(550.))
+                    .child(label),
+            )
             .child(control)
     }
 
     fn divider(&self) -> Div {
-        div()
-            .mx(px(14.))
-            .h(px(1.))
-            .bg(rgb(palette(self.config.dark_mode).line))
+        div().h(px(1.)).bg(rgb(palette(self.config.dark_mode).line))
     }
 
     fn empty(&self, icon: &str, title: &'static str, detail: &'static str) -> Div {
         let p = palette(self.config.dark_mode);
         div()
-            .flex_1()
-            .min_h(px(280.))
+            .w_full()
+            .px(px(20.))
+            .py(px(37.))
             .flex()
             .flex_col()
             .items_center()
-            .justify_center()
-            .gap(px(10.))
-            .child(
-                symbol(icon)
-                    .size(px(34.))
-                    .text_color(rgb(p.muted))
-                    .mb(px(4.)),
-            )
+            .when(!icon.is_empty(), |d| {
+                d.child(symbol(icon).size(px(34.)).text_color(rgb(p.muted)))
+            })
             .child(
                 div()
-                    .text_size(px(17.))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .mt(px(15.))
+                    .mb(px(12.45))
+                    .text_size(px(15.))
+                    .line_height(px(17.5))
+                    .font_weight(FontWeight(550.))
                     .child(title),
             )
-            .child(self.caption(detail))
+            .child(
+                self.caption(detail)
+                    .text_size(px(12.))
+                    .line_height(px(19.8))
+                    .mb(px(16.)),
+            )
     }
 
-    fn apps(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.selected_app.is_some() {
-            return self.app_information(cx);
-        }
-        let query = self.query.to_lowercase();
+    pub(super) fn visible_apps(&self) -> Vec<&glidepod_runtime::guest::AndroidApp> {
+        let query = self.query.trim().to_lowercase();
+        let recent = self.config.recent_apps();
         let mut apps = self
             .apps
             .iter()
+            .filter(|a| is_library_app(a))
             .filter(|a| {
-                (a.label.to_lowercase().contains(&query) || a.package_id.contains(&query))
+                if self.page == Page::Running {
+                    return self.windows.contains_key(&a.package_id);
+                }
+                (a.label.to_lowercase().contains(&query)
+                    || a.package_id.to_lowercase().contains(&query))
                     && (self.filter != 1 || a.game)
-                    && (self.page != Page::Running || self.windows.contains_key(&a.package_id))
+                    && (self.filter != 2 || recent.contains(&a.package_id))
             })
             .collect::<Vec<_>>();
-        if self.filter == 2 {
-            apps.sort_by_key(|a| std::cmp::Reverse(a.updated));
+        if self.page != Page::Running && self.filter == 2 {
+            apps.sort_by_key(|a| recent.iter().position(|p| p == &a.package_id));
         }
+        apps
+    }
+
+    fn apps(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.selected_app.is_some() {
+            return self.app_information(cx);
+        }
+        let p = palette(self.config.dark_mode);
+        let apps = self.visible_apps();
+        let running_page = self.page == Page::Running;
         let ready = matches!(self.runtime.vm, VmState::Running { .. });
-        let filters = div().flex().gap(px(4.)).children(
-            ["All apps", "Games", "Updated"]
+        if running_page && apps.is_empty() {
+            return self
+                .card()
+                .child(
+                    self.empty(
+                        "running",
+                        "No apps running",
+                        "Open an app from your library or its Mac entry.",
+                    )
+                    .child(
+                        button("open-library", "Open app library")
+                            .primary()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.page = Page::Apps;
+                                window.focus(&this.focus);
+                                cx.notify();
+                            })),
+                    ),
+                )
+                .into_any_element();
+        }
+        let filters = segmented(self.config.dark_mode).children(
+            ["All apps", "Games", "Recent"]
                 .into_iter()
                 .enumerate()
                 .map(|(i, label)| {
                     Button::new(("filter", i))
                         .label(label)
-                        .small()
-                        .ghost()
-                        .when(self.filter == i, |b| {
-                            b.bg(rgb(palette(self.config.dark_mode).selected))
-                        })
+                        .segment(self.filter == i)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.filter = i;
                             cx.notify();
                         }))
                 }),
         );
+        let focused = self.search.focus_handle(cx).is_focused(window);
+        let dark = self.config.dark_mode;
+        let focus_color = if dark { 0x94b59d } else { 0x709982 };
+        let search = div()
+            .id("library-search")
+            .w(px(if window.viewport_size().width <= px(980.) {
+                225.
+            } else {
+                268.
+            }))
+            .h(px(34.))
+            .min_w(px(150.))
+            .flex()
+            .items_center()
+            .gap(px(7.))
+            .pl(px(10.))
+            .pr(px(8.))
+            .border_1()
+            .rounded(px(7.))
+            .bg(rgb(p.panel))
+            .border_color(rgb(if focused {
+                focus_color
+            } else if dark {
+                0x4e5e51
+            } else {
+                0xcbd4cb
+            }))
+            .when(focused, |d| {
+                d.shadow(vec![BoxShadow {
+                    color: rgba((focus_color << 8) | 0x30).into(),
+                    offset: point(px(0.), px(0.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(3.),
+                }])
+            })
+            .when(!focused, |d| {
+                d.hover(|d| d.border_color(rgb(if dark { 0x617765 } else { 0xaebdaf })))
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    window.focus(&this.search.focus_handle(cx));
+                }),
+            )
+            .child(symbol("search").size(px(15.)).text_color(rgb(if dark {
+                0x9dad9e
+            } else {
+                0x7c897f
+            })))
+            .child(
+                div().flex_1().min_w_0().h(px(30.)).child(
+                    Input::new(&self.search)
+                        .appearance(false)
+                        .cleanable(false)
+                        .p_0()
+                        .h(px(30.))
+                        .text_size(px(12.))
+                        .line_height(px(18.)),
+                ),
+            )
+            .when(self.query.is_empty(), |d| {
+                d.child(self.caption("⌘ K").text_size(px(10.)).flex_shrink_0())
+            })
+            .when(!self.query.is_empty(), |d| {
+                d.child(
+                    Button::new("clear-query")
+                        .ghost()
+                        .icon(Icon::default().path("icons/close.svg"))
+                        .icon_size(px(15.))
+                        .w(px(23.))
+                        .h(px(24.))
+                        .p_0()
+                        .rounded(px(4.))
+                        .tooltip("Clear search")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.search.update(cx, |state, cx| {
+                                state.set_value("", window, cx);
+                                state.focus(window, cx);
+                            });
+                        })),
+                )
+            });
         div()
             .flex()
             .flex_col()
-            .gap(px(12.))
+            .when(!running_page, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(18.))
+                        .mb(px(12.))
+                        .child(filters)
+                        .child(search),
+                )
+            })
             .child(
                 div()
                     .flex()
-                    .justify_between()
                     .items_center()
-                    .child(filters)
+                    .justify_between()
+                    .h(px(25.))
+                    .mx(px(1.))
+                    .mb(px(10.))
+                    .child(self.caption(format!(
+                        "{} {}{}",
+                        apps.len(),
+                        if apps.len() == 1 { "app" } else { "apps" },
+                        if running_page {
+                            " running"
+                        } else if !self.query.trim().is_empty() {
+                            " found"
+                        } else if self.filter == 2 {
+                            " opened recently"
+                        } else {
+                            " installed"
+                        }
+                    )))
                     .child(
                         button("reload-apps", "Refresh")
+                            .small()
+                            .h(px(25.))
+                            .px(px(4.))
+                            .ghost()
                             .disabled(!ready || self.working)
                             .on_click(cx.listener(|this, _, _, cx| this.load_apps(cx))),
                     ),
             )
-            .child(self.caption(format!(
-                "{} apps{}",
-                apps.len(),
-                if ready { "" } else { " · Android is stopped" }
-            )))
             .when(apps.is_empty(), |d| {
-                d.child(self.empty(
-                    "apps",
-                    "No apps to show",
-                    "Start Android, then add an APK or refresh the app list.",
-                ))
-            })
-            .children(apps.into_iter().enumerate().map(|(i, app)| {
-                let package = app.package_id.clone();
-                let info = package.clone();
-                let remove = package.clone();
-                let close = package.clone();
-                let launcher = app.clone();
-                let running = self.windows.contains_key(&package);
-                self.group().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(12.))
-                        .p(px(12.))
-                        .children(
-                            app.icon_path
-                                .clone()
-                                .map(|path| img(path).size(px(36.)).rounded(px(7.))),
+                d.child(
+                    self.card().child(
+                        self.empty(
+                            "",
+                            if running_page {
+                                "No apps running"
+                            } else if !self.query.trim().is_empty() {
+                                "No matching apps"
+                            } else if self.filter == 2 {
+                                "No recent apps"
+                            } else if self.filter == 1 {
+                                "No games installed"
+                            } else {
+                                "No apps installed"
+                            },
+                            if running_page {
+                                "Open an app from your library or its Mac entry."
+                            } else if !self.query.trim().is_empty() {
+                                "Try an app name or package name."
+                            } else if self.filter == 2 {
+                                "Apps you open appear here."
+                            } else {
+                                "Install an APK to add your first app to this profile."
+                            },
                         )
-                        .child(
+                        .when(!self.query.is_empty(), |d| {
+                            d.child(button("empty-clear-search", "Clear search").on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.search.update(cx, |state, cx| {
+                                        state.set_value("", window, cx);
+                                        state.focus(window, cx);
+                                    });
+                                }),
+                            ))
+                        }),
+                    ),
+                )
+            })
+            .when(!apps.is_empty(), |d| {
+                d.child(
+                    self.card()
+                        .children(apps.into_iter().enumerate().map(|(i, app)| {
+                            let package = app.package_id.clone();
+                            let info = package.clone();
+                            let close = package.clone();
+                            let running = self.windows.contains_key(&package);
                             div()
-                                .flex_1()
-                                .min_w_0()
+                                .when(i > 0, |d| d.border_t_1().border_color(rgb(p.line)))
+                                .flex()
+                                .items_center()
+                                .gap(px(13.))
+                                .px(px(15.))
+                                .py(px(12.))
+                                .min_h(px(64.))
                                 .child(
                                     div()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child(app.label.clone()),
+                                        .size(px(37.))
+                                        .flex_shrink_0()
+                                        .rounded(px(10.))
+                                        .overflow_hidden()
+                                        .children(
+                                            app.icon_path.clone().map(|path| img(path).size_full()),
+                                        )
+                                        .when(app.icon_path.is_none(), |d| {
+                                            d.child(symbol("apps").size(px(30.)))
+                                        }),
                                 )
-                                .child(self.caption(app.package_id.clone())),
-                        )
-                        .child(
-                            Button::new(("open-app", i))
-                                .label(if running { "Show" } else { "Open" })
-                                .small()
-                                .disabled(!ready || self.working)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.open_app(package.clone(), cx)
-                                })),
-                        )
-                        .when(running, |d| {
-                            d.child(
-                                Button::new(("close-app", i))
-                                    .label("Close")
-                                    .small()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(handle) = this.windows.remove(&close) {
-                                            let _ = handle.update(cx, |_, w, _| w.remove_window());
-                                        }
-                                        cx.notify();
-                                    })),
-                            )
-                        })
-                        .child(
-                            Button::new(("launcher", i))
-                                .label("Add to Mac")
-                                .small()
-                                .disabled(self.working)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.add_launcher(launcher.clone(), cx)
-                                })),
-                        )
-                        .child(
-                            Button::new(("app-info", i))
-                                .label("Info")
-                                .small()
-                                .disabled(!ready || self.working)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.load_details(info.clone(), cx)
-                                })),
-                        )
-                        .when(!app.system, |d| {
-                            d.child(
-                                Button::new(("remove-app", i))
-                                    .label("Remove…")
-                                    .small()
-                                    .ghost()
-                                    .disabled(!ready || self.working)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.remove_app(remove.clone(), window, cx)
-                                    })),
-                            )
-                        }),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .line_height(px(14.))
+                                                .font_weight(FontWeight(550.))
+                                                .text_ellipsis()
+                                                .child(app.label.clone()),
+                                        )
+                                        .child(
+                                            self.caption(if app.game {
+                                                "Games"
+                                            } else {
+                                                "Android app"
+                                            })
+                                            .mt(px(5.)),
+                                        ),
+                                )
+                                .child(
+                                    self.caption(if running {
+                                        "Running".into()
+                                    } else {
+                                        app.version.clone()
+                                    })
+                                    .w(px(82.))
+                                    .text_ellipsis(),
+                                )
+                                .child(
+                                    Button::new(("open-app", i))
+                                        .label(if running { "Focus" } else { "Open" })
+                                        .small()
+                                        .w(px(57.))
+                                        .h(px(28.))
+                                        .disabled(!ready || self.working)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.open_app(package.clone(), cx)
+                                        })),
+                                )
+                                .when(running_page, |d| {
+                                    d.child(
+                                        Button::new(("close-app", i))
+                                            .label("Close window")
+                                            .small()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if let Some(handle) = this.windows.remove(&close) {
+                                                    let _ = handle
+                                                        .update(cx, |_, w, _| w.remove_window());
+                                                }
+                                                cx.notify();
+                                            })),
+                                    )
+                                })
+                                .child(
+                                    Button::new(("app-info", i))
+                                        .icon(Icon::default().path("icons/more.svg"))
+                                        .icon_size(px(17.))
+                                        .tooltip(format!("Details for {}", app.label))
+                                        .small()
+                                        .ghost()
+                                        .w(px(25.))
+                                        .h(px(28.))
+                                        .disabled(!ready || self.working)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.load_details(info.clone(), cx)
+                                        })),
+                                )
+                        })),
                 )
-            }))
+            })
+            .when(!running_page, |d| {
+                d.child(
+                    div()
+                        .mt(px(12.))
+                        .py(px(3.))
+                        .px(px(1.))
+                        .min_h(px(30.))
+                        .flex()
+                        .gap(px(8.))
+                        .items_center()
+                        .child(symbol("file").size(px(15.)).text_color(rgb(p.muted)))
+                        .child(self.caption("Drop an APK to install.")),
+                )
+            })
             .into_any_element()
     }
 
@@ -262,7 +484,7 @@ impl Center {
                             })),
                     ),
             );
-        let mut content = div().w_full().max_w(px(680.)).child(heading);
+        let mut content = div().w_full().child(heading);
         let Some(d) = self.app_details.as_ref() else {
             return content
                 .child(self.caption(if self.working {
@@ -272,6 +494,39 @@ impl Center {
                 }))
                 .into_any_element();
         };
+        let open = package.clone();
+        let remove = package.clone();
+        let launcher = self.apps.iter().find(|a| a.package_id == package).cloned();
+        content = content.child(
+            div()
+                .flex()
+                .gap(px(8.))
+                .mb(px(18.))
+                .child(
+                    button("info-open", "Open app")
+                        .primary()
+                        .disabled(!ready)
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.open_app(open.clone(), cx)),
+                        ),
+                )
+                .children(launcher.map(|app| {
+                    button("info-launcher", "Create Mac shortcut")
+                        .disabled(self.working)
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.add_launcher(app.clone(), cx)),
+                        )
+                }))
+                .when(!d.system, |v| {
+                    v.child(
+                        button("info-remove", "Uninstall…")
+                            .disabled(!ready)
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.remove_app(remove.clone(), w, cx)
+                            })),
+                    )
+                }),
+        );
         let mutable = ready
             && !d.system
             && !d.shared_uid
@@ -389,9 +644,8 @@ impl Center {
     }
 
     fn android(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = palette(self.config.dark_mode);
         let settings = self.config.settings();
-        let profiles = div().flex().gap(px(3.)).children(
+        let profiles = segmented(self.config.dark_mode).children(
             [ProfileId::Personal, ProfileId::Developer]
                 .into_iter()
                 .enumerate()
@@ -400,38 +654,32 @@ impl Center {
                         .label(profile.label())
                         .small()
                         .disabled(self.runtime.active() || self.working)
-                        .when(self.config.active_profile == profile, |b| b.primary())
+                        .segment(self.config.active_profile == profile)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.update_settings(|c| c.active_profile = profile, cx)
                         }))
                 }),
         );
-        let memory = div()
-            .flex()
-            .gap(px(3.))
-            .children([2048, 4096, 6144, 8192].into_iter().map(|m| {
+        let memory = segmented(self.config.dark_mode).children(
+            [2048, 4096, 6144, 8192].into_iter().map(|m| {
                 Button::new(("memory", m as usize))
                     .label(format!("{} GB", m / 1024))
                     .small()
-                    .ghost()
-                    .when(settings.memory_mib == m, |b| b.bg(rgb(p.selected)))
+                    .segment(settings.memory_mib == m)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.update_settings(|c| c.settings_mut().memory_mib = m, cx)
                     }))
-            }));
-        let cpus = div()
-            .flex()
-            .gap(px(3.))
-            .children([2, 4, 6, 8].into_iter().map(|n| {
-                Button::new(("cpus", n as usize))
-                    .label(n.to_string())
-                    .small()
-                    .ghost()
-                    .when(settings.vcpus == n, |b| b.bg(rgb(p.selected)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.update_settings(|c| c.settings_mut().vcpus = n, cx)
-                    }))
-            }));
+            }),
+        );
+        let cpus = segmented(self.config.dark_mode).children([2, 4, 6, 8].into_iter().map(|n| {
+            Button::new(("cpus", n as usize))
+                .label(n.to_string())
+                .small()
+                .segment(settings.vcpus == n)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.update_settings(|c| c.settings_mut().vcpus = n, cx)
+                }))
+        }));
         let runtime = self
             .group()
             .child(
@@ -495,7 +743,7 @@ impl Center {
             .child(self.row("Processors", cpus));
         div()
             .w_full()
-            .max_w(px(680.))
+
             .child(self.section("Runtime", runtime))
             .child(
                 self.caption(self.runtime.message.clone())
@@ -574,7 +822,7 @@ impl Center {
                     .on_click(cx.listener(|this, _, _, cx| this.probe(cx))),
                 ),
             );
-        let renderers = div().flex().gap(px(3.)).children(
+        let renderers = segmented(self.config.dark_mode).children(
             [
                 (Renderer::Automatic, "Automatic"),
                 (Renderer::Metal, "Metal"),
@@ -586,7 +834,7 @@ impl Center {
                 Button::new(("renderer", i))
                     .label(label)
                     .small()
-                    .when(self.config.settings().renderer == renderer, |b| b.primary())
+                    .segment(self.config.settings().renderer == renderer)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.update_settings(|c| c.settings_mut().renderer = renderer, cx)
                     }))
@@ -639,7 +887,7 @@ impl Center {
                 ),
             )
         });
-        div().w_full().max_w(px(680.))
+        div().w_full()
             .child(self.section("This Mac", host)).children(results)
             .child(self.section("Android 3D check",self.group()
                 .child(self.row("Textured 3D · 720 × 1080",div().flex().gap(px(8.))
@@ -658,7 +906,7 @@ impl Center {
     }
 
     fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        let appearance = div().flex().gap(px(3.)).children(
+        let appearance = segmented(self.config.dark_mode).children(
             [(false, "Light"), (true, "Dark")]
                 .into_iter()
                 .enumerate()
@@ -666,7 +914,7 @@ impl Center {
                     Button::new(("appearance", i))
                         .label(label)
                         .small()
-                        .when(self.config.dark_mode == dark, |b| b.primary())
+                        .segment(self.config.dark_mode == dark)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.update_settings(|c| c.dark_mode = dark, cx);
                             apply_theme(this.config.dark_mode, cx);
@@ -680,17 +928,12 @@ impl Center {
             .child(
                 self.row(
                     "Android audio · next start",
-                    button(
-                        "audio-output",
-                        if self.config.audio_enabled {
-                            "On"
-                        } else {
-                            "Off"
-                        },
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.update_settings(|c| c.audio_enabled = !c.audio_enabled, cx)
-                    })),
+                    Switch::new("audio-output")
+                        .checked(self.config.audio_enabled)
+                        .tooltip("Android audio")
+                        .on_click(cx.listener(|this, value, _, cx| {
+                            this.update_settings(|c| c.audio_enabled = *value, cx)
+                        })),
                 ),
             )
             .child(self.divider())
@@ -710,10 +953,10 @@ impl Center {
             ));
         div()
             .w_full()
-            .max_w(px(680.))
+
             .child(self.section("General", general))
             .child(self.section("Notifications",self.group()
-                .child(self.row("Android app notifications",button("notification-forwarding",if self.config.notifications_enabled {"On"}else{"Off"})
+                .child(self.row("Android app notifications",Switch::new("notification-forwarding").checked(self.config.notifications_enabled).tooltip("Android app notifications")
                     .disabled(self.working || (!self.config.notifications_enabled && !matches!(self.runtime.vm,VmState::Running{..})))
                     .on_click(cx.listener(|this,_,_,cx|this.toggle_notifications(cx)))))
                 .child(self.caption(cx.global::<AppSession>().notifications.status.lock().unwrap().clone()).px(px(14.)).pb(px(12.)))
@@ -727,35 +970,39 @@ impl Center {
                         .child(self.row("License", self.caption("Apache-2.0"))),
                 ),
             )
-            .child(self.caption("Use Add to Mac in Apps to create launch entries. Native WidgetKit widgets are not available yet."))
+            .child(self.caption("Use Create Mac shortcut in an app’s details to add it to Applications. Native WidgetKit widgets are not available yet."))
             .into_any_element()
     }
 
-    fn sidebar(&self, cx: &mut Context<Self>) -> Div {
+    fn sidebar(&self, compact: bool, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let p = palette(self.config.dark_mode);
-        let rows = PAGES
-            .into_iter()
-            .filter(|page| *page != Page::Settings)
-            .enumerate()
-            .map(|(i, page)| {
-                Button::new(("nav", i))
-                    .label(page.label())
-                    .icon(Icon::default().path(format!("icons/{}.svg", page.icon())))
-                    .ghost()
-                    .w_full()
-                    .h(px(32.))
-                    .justify_start()
-                    .px(px(9.))
-                    .rounded(px(6.))
-                    .when(self.page == page, |b| b.bg(rgb(p.selected)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.page = page;
-                        window.focus(&this.focus);
-                        cx.notify();
-                    }))
-            });
+        let rows = PAGES.into_iter().enumerate().map(|(i, page)| {
+            Button::new(("nav", i))
+                .label(page.label())
+                .icon(Icon::default().path(format!("icons/{}.svg", page.icon())))
+                .navigation(self.page == page)
+                .when(page == Page::Running, |b| {
+                    b.badge(
+                        self.apps
+                            .iter()
+                            .filter(|app| {
+                                is_library_app(app) && self.windows.contains_key(&app.package_id)
+                            })
+                            .count()
+                            .to_string(),
+                    )
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.page = page;
+                    this.selected_app = None;
+                    this.app_details = None;
+                    window.focus(&this.focus);
+                    cx.notify();
+                }))
+        });
         div()
-            .w(px(184.))
+            .id("sidebar")
+            .w(px(if compact { 174. } else { 202. }))
             .flex_shrink_0()
             .h_full()
             .bg(rgb(p.side))
@@ -763,96 +1010,88 @@ impl Center {
             .border_color(rgb(p.line))
             .flex()
             .flex_col()
-            .p(px(10.))
-            .child(self.caption("Library").px(px(9.)).py(px(8.)))
-            .child(div().flex().flex_col().gap(px(3.)).children(rows))
-            .child(div().flex_1())
-            .child(
-                Button::new("settings-nav")
-                    .label("Settings")
-                    .icon(Icon::default().path("icons/settings.svg"))
-                    .ghost()
-                    .w_full()
-                    .h(px(32.))
-                    .justify_start()
-                    .px(px(9.))
-                    .rounded(px(6.))
-                    .when(self.page == Page::Settings, |b| b.bg(rgb(p.selected)))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.page = Page::Settings;
-                        window.focus(&this.focus);
-                        cx.notify();
-                    })),
-            )
+            .px(px(12.))
+            .py(px(19.))
+            .child(TitleBar::new().h(px(11.)).pl_0().bg(rgb(p.side)).border_0())
             .child(
                 div()
-                    .mt(px(12.))
-                    .pt(px(12.))
-                    .px(px(8.))
-                    .border_t_1()
-                    .border_color(rgb(p.line))
+                    .flex()
+                    .items_center()
+                    .gap(px(if compact { 8. } else { 10. }))
+                    .mx(px(if compact { 3. } else { 8. }))
+                    .mt(px(29.))
+                    .mb(px(30.))
                     .child(
-                        div()
-                            .text_size(px(12.))
-                            .child(self.config.active_profile.label()),
+                        img(ImageSource::Resource(Resource::Embedded(
+                            crate::assets::sidebar_icon(
+                                self.config.dark_mode,
+                                window.scale_factor(),
+                            )
+                            .into(),
+                        )))
+                        .size(px(40.)),
                     )
                     .child(
-                        self.caption(format!("Android {}", self.runtime.label().to_lowercase()))
-                            .mt(px(4.))
-                            .mb(px(4.)),
+                        div()
+                            .child(
+                                div()
+                                    .text_size(px(18.))
+                                    .line_height(px(22.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("GlidePod"),
+                            )
+                            .child(
+                                self.caption("Android for macOS")
+                                    .text_size(px(if compact { 9. } else { 10. }))
+                                    .line_height(px(12.))
+                                    .mt(px(4.)),
+                            ),
                     ),
             )
+            .child(div().flex().flex_col().gap(px(3.)).children(rows))
     }
 
     fn toolbar(&self, cx: &mut Context<Self>) -> TitleBar {
         let p = palette(self.config.dark_mode);
-        let search = div().w(px(208.)).h(px(28.)).child(
-            Input::new(&self.search)
-                .small()
-                .min_h(px(28.))
-                .cleanable(true)
-                .prefix(
-                    Icon::default()
-                        .path("icons/search.svg")
-                        .text_color(rgb(p.muted)),
-                )
-                .suffix(self.caption("⌘F")),
-        );
         TitleBar::new()
-            .h(px(52.))
-            .bg(rgb(p.side))
+            .h(px(58.))
+            .bg(rgb(p.bg))
             .border_color(rgb(p.line))
-            .pr(px(16.))
-            .child(div().w(px(104.)).flex_shrink_0())
+            .px(px(24.))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .pl(px(24.))
                     .flex()
                     .items_center()
                     .justify_between()
                     .child(
                         div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_size(px(14.))
-                            .child(self.page.label()),
-                    )
-                    .child(
-                        div()
                             .flex()
                             .items_center()
-                            .gap(px(10.))
-                            .when(self.page == Page::Apps, |d| d.child(search))
+                            .gap(px(11.))
                             .child(
-                                button("open-apk", "Add APK…")
-                                    .icon(Icon::default().path("icons/plus.svg"))
-                                    .disabled(self.working || self.apk.is_some())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.choose_apk(&ChooseApk, window, cx)
-                                    })),
+                                self.caption(self.config.active_profile.label())
+                                    .text_size(px(12.)),
+                            )
+                            .child(self.caption("/").text_size(px(12.)))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_size(px(12.))
+                                    .child(self.page.label()),
                             ),
+                    )
+                    .child(
+                        button("open-apk", "Install APK")
+                            .primary()
+                            .shortcut("⌘O")
+                            .icon(Icon::default().path("icons/plus.svg"))
+                            .disabled(self.working || self.apk.is_some())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.choose_apk(&ChooseApk, window, cx)
+                            })),
                     ),
             )
     }
@@ -963,6 +1202,13 @@ impl Center {
                     .shadow_lg()
                     .child(
                         div()
+                            .text_size(px(19.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .mb(px(18.))
+                            .child("Review installation"),
+                    )
+                    .child(
+                        div()
                             .flex()
                             .items_center()
                             .gap(px(12.))
@@ -1018,12 +1264,13 @@ impl Render for Center {
             window.focus(&self.focus);
         }
         let p = palette(self.config.dark_mode);
+        let compact = window.viewport_size().width <= px(980.);
         let content = match self.page {
-            Page::Apps => self.apps(cx),
+            Page::Apps => self.apps(window, cx),
             Page::Android => self.android(cx),
             Page::Graphics => self.graphics(cx),
             Page::Settings => self.settings(cx),
-            Page::Running => self.apps(cx),
+            Page::Running => self.apps(window, cx),
             Page::Widgets => div().flex().flex_col().gap(px(12.))
                 .child(self.section("Android widgets",self.group().child(self.row("Live widget panel",button("open-widgets","Open Widgets").disabled(self.working || !matches!(self.runtime.vm,VmState::Running{..})).on_click(cx.listener(|this,_,_,cx|this.open_widgets(cx)))))))
                 .child(self.caption("Choose and configure installed widget providers in the panel. Android must stay running for live updates."))
@@ -1037,9 +1284,9 @@ impl Render for Center {
             .size_full()
             .relative()
             .flex()
-            .flex_col()
             .font_family(".SystemUIFont")
-            .text_size(px(13.))
+            .text_size(px(12.))
+            .line_height(px(18.))
             .text_color(rgb(p.text))
             .bg(rgb(p.bg))
             .on_action(cx.listener(Self::choose_apk))
@@ -1051,38 +1298,121 @@ impl Render for Center {
                     this.inspect(path.clone(), cx);
                 }
             }))
-            .child(self.toolbar(cx))
+            .child(self.sidebar(compact, window, cx))
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.sidebar(cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .id("content")
-                                    .flex_1()
-                                    .min_h_0()
-                                    .overflow_y_scroll()
-                                    .p(px(24.))
-                                    .child(content),
-                            )
-                            .children(self.notice.as_ref().map(|notice| {
-                                self.caption(notice.clone())
-                                    .px(px(24.))
-                                    .py(px(10.))
-                                    .border_t_1()
-                                    .border_color(rgb(p.line))
-                            })),
-                    ),
+                div().flex_1().min_w_0().min_h_0().flex().child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .child(self.toolbar(cx))
+                        .child(
+                            div()
+                                .id("content")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .px(px(if compact { 22. } else { 28. }))
+                                .pt(px(if compact { 24. } else { 26. }))
+                                .pb(px(30.))
+                                .child(
+                                    div()
+                                        .mb(px(23.))
+                                        .child(
+                                            div()
+                                                .text_size(px(22.))
+                                                .line_height(px(26.4))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(if self.page == Page::Running {
+                                                    "Running apps"
+                                                } else {
+                                                    self.page.label()
+                                                }),
+                                        )
+                                        .child(
+                                            self.caption(match self.page {
+                                                Page::Apps => format!(
+                                                    "Installed in the {} profile.",
+                                                    self.config.active_profile.label()
+                                                ),
+                                                Page::Running => {
+                                                    "Manage open Android windows.".into()
+                                                }
+                                                Page::Android => {
+                                                    "Runtime, resources and developer access."
+                                                        .into()
+                                                }
+                                                Page::Graphics => {
+                                                    "Rendering, performance and compatibility."
+                                                        .into()
+                                                }
+                                                Page::Widgets => {
+                                                    "Android widgets on your Mac desktop.".into()
+                                                }
+                                                Page::Settings => {
+                                                    "Mac integration and preferences.".into()
+                                                }
+                                            })
+                                            .text_size(px(12.))
+                                            .mt(px(7.)),
+                                        ),
+                                )
+                                .child(content),
+                        )
+                        .children(self.notice.as_ref().map(|notice| {
+                            self.caption(notice.clone())
+                                .px(px(24.))
+                                .py(px(10.))
+                                .border_t_1()
+                                .border_color(rgb(p.line))
+                        })),
+                ),
             )
             .when(self.apk.is_some(), |d| d.child(self.apk_sheet(cx)))
+    }
+}
+
+#[cfg(test)]
+mod catalog_visibility_tests {
+    use super::is_library_app;
+
+    #[::core::prelude::v1::test]
+    fn library_excludes_system_apps_and_helpers_without_package_prefix_guessing() {
+        let app = |package: &str, system| glidepod_runtime::guest::AndroidApp {
+            package_id: package.into(),
+            component: format!("{package}/.Main"),
+            label: "App".into(),
+            version: "1.0".into(),
+            system,
+            game: false,
+            updated: 0,
+            icon_png: String::new(),
+            icon_path: None,
+        };
+        let catalog = [
+            app("com.android.deskclock", true),
+            app("dev.example.updated_system_app", true),
+            app("dev.glidepod.widgets", false),
+            app("dev.glidepod.input", false),
+            app("dev.glidepod.notifications", false),
+            app("studio.example.notes", false),
+            app("com.android.user_installed", false),
+            app("dev.glidepod.fixture", false),
+        ];
+        let visible = catalog
+            .iter()
+            .filter(|a| is_library_app(a))
+            .map(|a| a.package_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            visible,
+            [
+                "studio.example.notes",
+                "com.android.user_installed",
+                "dev.glidepod.fixture"
+            ]
+        );
     }
 }

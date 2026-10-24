@@ -1,6 +1,20 @@
 use gpui::{AssetSource, SharedString};
 use std::borrow::Cow;
 pub struct Assets;
+
+/// Match the 40-point sidebar mark to the window's backing pixels, including
+/// when the window moves between standard and Retina displays.
+pub fn sidebar_icon(dark: bool, scale_factor: f32) -> &'static str {
+    match (dark, scale_factor.ceil().clamp(1., 3.) as u8) {
+        (false, 1) => "sidebar-light@1x.png",
+        (false, 2) => "sidebar-light@2x.png",
+        (false, _) => "sidebar-light@3x.png",
+        (true, 1) => "sidebar-dark@1x.png",
+        (true, 2) => "sidebar-dark@2x.png",
+        (true, _) => "sidebar-dark@3x.png",
+    }
+}
+
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
         let bytes: &'static [u8] = match path {
@@ -27,7 +41,24 @@ impl AssetSource for Assets {
             "icons/check.svg" => include_bytes!("../../../assets/icons/check.svg"),
             "icons/circle-x.svg" => include_bytes!("../../../assets/icons/circle-x.svg"),
             "icons/chevron-down.svg" => include_bytes!("../../../assets/icons/chevron-down.svg"),
-            "glidepod-icon.svg" => include_bytes!("../../../assets/glidepod-icon.svg"),
+            "sidebar-light@1x.png" => {
+                include_bytes!("../../../assets/brand/glidepod-sidebar-light@1x.png")
+            }
+            "sidebar-light@2x.png" => {
+                include_bytes!("../../../assets/brand/glidepod-sidebar-light@2x.png")
+            }
+            "sidebar-light@3x.png" => {
+                include_bytes!("../../../assets/brand/glidepod-sidebar-light@3x.png")
+            }
+            "sidebar-dark@1x.png" => {
+                include_bytes!("../../../assets/brand/glidepod-sidebar-dark@1x.png")
+            }
+            "sidebar-dark@2x.png" => {
+                include_bytes!("../../../assets/brand/glidepod-sidebar-dark@2x.png")
+            }
+            "sidebar-dark@3x.png" => {
+                include_bytes!("../../../assets/brand/glidepod-sidebar-dark@3x.png")
+            }
             _ => return Ok(None),
         };
         Ok(Some(Cow::Borrowed(bytes)))

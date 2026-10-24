@@ -9,7 +9,7 @@ const icons = {
  android:'<rect x="3" y="4" width="18" height="13" rx="3"/><path d="M8 21h8M12 17v4M7 8h10M7 12h6"/>',
  graphics:'<path d="M12 2 3 7v10l9 5 9-5V7zM3 7l9 5 9-5M12 12v10M7.5 4.5l9 5"/>',
  widgets:'<rect x="3" y="3" width="10" height="10" rx="2"/><rect x="16" y="3" width="5" height="10" rx="2"/><rect x="3" y="16" width="18" height="5" rx="2"/>',
- settings:'<path d="m9 3-1 3-3 1v4l3 1 1 3h4l1-3 3-1V7l-3-1-1-3z" transform="translate(1 3)"/><circle cx="12" cy="12" r="2.5"/>',
+ settings:'<path d="M18.467,9.321 18.847,10.545 20.863,10.437 20.863,13.563 18.847,13.455 18.467,14.679 17.871,15.812 19.372,17.162 17.162,19.372 15.812,17.871 14.679,18.467 13.455,18.847 13.563,20.863 10.437,20.863 10.545,18.847 9.321,18.467 8.188,17.871 6.838,19.372 4.628,17.162 6.129,15.812 5.533,14.679 5.153,13.455 3.137,13.563 3.137,10.437 5.153,10.545 5.533,9.321 6.129,8.188 4.628,6.838 6.838,4.628 8.188,6.129 9.321,5.533 10.545,5.153 10.437,3.137 13.563,3.137 13.455,5.153 14.679,5.533 15.812,6.129 17.162,4.628 19.372,6.838 17.871,8.188Z"/><circle cx="12" cy="12" r="3"/>',
  notes:'<path d="M7 3h10l3 3v15H4V3zM8 9h8M8 13h8M8 17h5"/>',
  music:'<path d="M9 17V5l11-2v12M9 8l11-2"/><ellipse cx="6" cy="18" rx="3" ry="2.5"/><ellipse cx="17" cy="16" rx="3" ry="2.5"/>',
  game:'<path d="m8 6-3 1-3 11 3 2 4-4h6l4 4 3-2-3-11-3-1zM7 9v5M4.5 11.5h5M16 10h.1M18 13h.1"/>',
@@ -53,17 +53,26 @@ const statusText = () => ({running:'Running',stopped:'Stopped',starting:'Startin
 function toast(message) { $('#toast').textContent=message; $('#toast').classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),3400); }
 function showCenter(){ releaseCapture(); $('#center').style.display='flex'; $('#center').style.zIndex=++z; }
 function go(next){ page=next; showCenter(); render(); }
+const brandImage = () => `assets/glidepod-icon-${state.theme === 'dark' ? 'dark' : 'light'}.png`;
 function render(){
  document.body.classList.toggle('dark',state.theme==='dark');
  $('#navigation').innerHTML = [['apps','Apps'],['running','Running'],['android','Android'],['graphics','Graphics'],['widgets','Widgets'],['settings','Settings']].map(([id,label])=>`<button data-page="${id}" class="${page===id?'active':''}" ${page===id?'aria-current="page"':''} title="${label}">${icon(id)}<span class="nav-label">${label}</span>${id==='running'?`<span class="count">${windows.size}</span>`:''}</button>`).join('');
  $('#page-label').textContent={apps:'Apps',running:'Running',android:'Android',graphics:'Graphics',widgets:'Widgets',settings:'Settings'}[page];
- $('#runtime-mini').innerHTML=`<strong>Android · ${state.profile==='personal'?'Personal':'Developer'}</strong><div class="mini-line"><i class="dot ${state.vm==='running'?'':'off'}"></i>${statusText()}<span style="margin-left:auto">${rootOn()?'Root on':'Root off'}</span></div>`;
  $('#profile-label').textContent=state.profile==='personal'?'Personal':'Developer';
  $('#theme-button').innerHTML=icon('appearance');
  $('#theme-button').setAttribute('aria-label',state.theme==='light'?'Switch to dark appearance':'Switch to light appearance');
  const renderers={apps:appsPage,running:runningPage,android:androidPage,graphics:graphicsPage,widgets:widgetsPage,settings:settingsPage};
  $('#page').innerHTML=renderers[page]();
- renderDock(); renderWidgets(); save();
+ renderDock(); renderWidgets();
+ $$('.brand-mark').forEach(image => {
+   image.src = brandImage();
+   if (image.closest('.wordmark')) {
+     const appearance = state.theme === 'dark' ? 'dark' : 'light';
+     image.srcset = [1, 2, 3].map(scale => `assets/glidepod-sidebar-${appearance}@${scale}x.png ${scale}x`).join(', ');
+   }
+ });
+ $('link[rel="icon"]').href = brandImage();
+ save();
 }
 const heading=(eyebrow,title,subtitle,aside='')=>`<div class="page-heading"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${subtitle}</p></div>${aside?`<span class="title-aside">${aside}</span>`:''}</div>`;
 function appsPage(){return `${heading('','Apps','Installed in the '+(state.profile==='personal'?'Personal':'Developer')+' profile.')}
@@ -99,7 +108,7 @@ function widgetsPage(){return `${heading('','Widgets','Add Android widgets to yo
 function toggle(key,label){return `<button class="toggle" role="switch" aria-label="${label}" aria-checked="${state.settings[key]}" data-toggle="${key}"></button>`;}
 function settingsPage(){return `${heading('','Settings','macOS integration and appearance.')}
  <div class="card">${[['entries','Mac app entries','Add installed apps to Applications, Spotlight and supported Launchpad versions.'],['clipboard','Share clipboard','Opt-in text sharing between the active Android app and your Mac.'],['notifications','Android notifications','Show permitted Android notifications under GlidePod.'],['login','Start at login','Keep GlidePod available from the menu bar.']].map(([key,title,desc])=>`<div class="row"><div><strong>${title}</strong><p>${desc}</p></div>${toggle(key,title)}</div>`).join('')}</div><div class="card"><div class="row"><div><strong>Open APK files with GlidePod</strong><p>Use the system’s file-association choice.</p></div><button class="button" data-action="association">Preview setup</button></div><div class="row"><div><strong>Appearance</strong><p>Match your workspace.</p></div><button class="button" data-action="theme">${state.theme==='light'?'Switch to dark':'Switch to light'}</button></div></div><div class="card"><h2>License and distribution</h2><p>Proposed Apache-2.0 project license. Direct distribution with signing and notarization. Android and bundled dependencies retain their own licenses.</p><a class="button" href="../research/05-licensing-and-distribution.md" target="_blank" rel="noopener">Read the distribution plan ↗</a></div>`;}
-function renderDock(){ $('#dock').innerHTML=`<button data-action="show-center" aria-label="Open GlidePod"><img class="brand-mark" src="assets/glidepod-icon.svg" alt=""><i class="dot"></i></button><span class="dock-divider"></span>${[...new Set([...windows.keys(),...state.profiles[state.profile].slice(0,3)])].slice(0,6).map(id=>{const a=app(id);return `<button data-action="open" data-id="${id}" title="${escapeHTML(a.name)}" aria-label="Open ${escapeHTML(a.name)}">${appIcon(a)}${windows.has(id)?'<i class="dot"></i>':''}</button>`;}).join('')}<span class="dock-divider"></span><button data-action="entries" aria-label="Browse Mac app entries"><span class="app-icon" style="background:#edf1e8;color:#7b9374">${icon('apps')}</span></button>`; }
+function renderDock(){ $('#dock').innerHTML=`<button data-action="show-center" aria-label="Open GlidePod"><img class="brand-mark" src="${brandImage()}" alt=""><i class="dot"></i></button><span class="dock-divider"></span>${[...new Set([...windows.keys(),...state.profiles[state.profile].slice(0,3)])].slice(0,6).map(id=>{const a=app(id);return `<button data-action="open" data-id="${id}" title="${escapeHTML(a.name)}" aria-label="Open ${escapeHTML(a.name)}">${appIcon(a)}${windows.has(id)?'<i class="dot"></i>':''}</button>`;}).join('')}<span class="dock-divider"></span><button data-action="entries" aria-label="Browse Mac app entries"><span class="app-icon" style="background:#edf1e8;color:#7b9374">${icon('apps')}</span></button>`; }
 function widgetContent(type){return type==='weather'?`<div class="widget-preview weather"><span class="widget-symbol">${icon('sun')}</span><small>San Francisco</small><strong>19°</strong><small>Sunny · H:21° L:14°</small></div>`:`<div class="widget-preview music"><span class="widget-symbol">${icon('music')}</span><small>PLAYLIST</small><strong>Slow mornings</strong><small>12 tracks · 48 min</small></div>`;}
 function renderWidgets(){ $('#widget-panels').innerHTML=state.pinned.filter(id=>state.profiles[state.profile].includes(id)).map((id,i)=>`<article class="desktop-widget" style="top:${110+i*210}px"><div class="widget-top"><span>LIVE ANDROID PANEL · DEMO</span><button data-action="pin" data-id="${id}" aria-label="Remove ${app(id).name} widget">${icon('close')}</button></div>${widgetContent(id==='weather'?'weather':'music')}<small>${state.vm==='running'?'Illustrative content · just now':'Paused · Android is stopped'}</small><button class="button soft" style="margin-top:12px;width:100%" data-action="${state.vm==='running'?'open':'start-widget'}" data-id="${id}">${state.vm==='running'?'Open '+app(id).name:'Start Android'}</button></article>`).join(''); }
 function modal(title,content,actions=''){ dialogReturnFocus=document.activeElement; dialogAction=null; $('#dialog-content').innerHTML=`<div class="dialog-top"><span class="eyebrow" style="margin:0">GlidePod · Preview</span><button class="close-dialog" data-action="dismiss" aria-label="Close dialog">${icon('close')}</button></div><h2 id="dialog-title">${title}</h2>${content}${actions?`<div class="dialog-actions">${actions}</div>`:''}`;if(!$('#dialog').open)$('#dialog').showModal(); }

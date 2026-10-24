@@ -1,9 +1,11 @@
 mod app_window;
 mod assets;
+mod controls;
 mod management_ui;
 mod notification_bridge;
 mod views;
 mod window_input;
+use controls::Button;
 use glidepod_core::{ProfileId, Renderer, VmState};
 use glidepod_installer::ApkReport;
 use glidepod_macos::{HostReport, ProbeReport};
@@ -11,8 +13,7 @@ use glidepod_runtime::experimental::{ExperimentalRuntime, RuntimeOwner, RuntimeS
 use glidepod_runtime::{Configuration, Store};
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Disableable, Icon, Root, Sizable, Theme, ThemeMode,
-    button::{Button, ButtonVariants},
+    Disableable, Icon, Root, Theme, ThemeMode,
     input::{Input, InputEvent, InputState},
 };
 use std::{
@@ -78,23 +79,23 @@ struct Palette {
 fn palette(dark: bool) -> Palette {
     if dark {
         Palette {
-            bg: 0x202221,
-            side: 0x292b29,
-            panel: 0x292b29,
-            text: 0xe9ebe8,
-            muted: 0x989e98,
-            line: 0x383c39,
+            bg: 0x202923,
+            side: 0x242e27,
+            panel: 0x28322b,
+            text: 0xe0e7dd,
+            muted: 0x98a596,
+            line: 0x374239,
             selected: 0x3a503e,
             accent: 0x9ab9a1,
         }
     } else {
         Palette {
-            bg: 0xfafbf9,
-            side: 0xf0f1ef,
+            bg: 0xfbfcfa,
+            side: 0xf0f3ef,
             panel: 0xffffff,
-            text: 0x272b28,
-            muted: 0x747a74,
-            line: 0xe2e5e0,
+            text: 0x24342e,
+            muted: 0x69776e,
+            line: 0xe0e6df,
             selected: 0xdce7dc,
             accent: 0x315e4b,
         }
@@ -112,12 +113,13 @@ fn apply_theme(dark: bool, cx: &mut App) {
     );
     let p = palette(dark);
     let theme = Theme::global_mut(cx);
-    theme.font_size = px(13.);
+    theme.font_size = px(12.);
     theme.radius = px(6.);
     theme.shadow = false;
     theme.colors.background = rgb(p.panel).into();
     theme.colors.foreground = rgb(p.text).into();
     theme.colors.input = rgb(p.line).into();
+    theme.colors.muted_foreground = rgb(if dark { 0x8c9e8e } else { 0x839087 }).into();
     theme.colors.ring = rgb(0x709982).into();
     theme.colors.primary = rgb(p.accent).into();
     theme.colors.primary_hover = rgb(if dark { 0xb0c9b4 } else { 0x284e3e }).into();
@@ -135,7 +137,7 @@ fn symbol(name: &str) -> Svg {
         .flex_shrink_0()
 }
 fn button(id: &'static str, label: impl Into<SharedString>) -> Button {
-    Button::new(id).label(label).small().h(px(28.))
+    Button::new(id).label(label)
 }
 enum Work {
     Apk(Result<ApkReport, String>),
@@ -219,12 +221,22 @@ impl Center {
                 .placeholder("Search apps")
                 .clean_on_escape()
         });
-        let subscription = cx.subscribe_in(&search, window, |this, input, event, _, cx| {
+        let subscription = cx.subscribe_in(&search, window, |this, input, event, window, cx| {
             if matches!(event, InputEvent::Change) {
                 this.query = input.read(cx).value().to_string();
                 this.selected_app = None;
                 this.app_details = None;
                 cx.notify();
+            }
+            if matches!(event, InputEvent::PressEnter { .. })
+                && this.apk.is_none()
+                && matches!(this.runtime.vm, VmState::Running { .. })
+                && !input.update(cx, |input, cx| {
+                    input.marked_text_range(window, cx).is_some()
+                })
+                && let Some(package) = this.visible_apps().first().map(|a| a.package_id.clone())
+            {
+                this.open_app(package, cx);
             }
         });
         let (sender, receiver) = mpsc::channel();
@@ -369,6 +381,7 @@ impl Center {
                         cx,
                     ) {
                         Ok(window) => {
+                            self.update_settings(|c| c.record_opened_app(&package), cx);
                             self.windows.insert(package, window);
                             self.notice = None;
                         }
@@ -513,6 +526,7 @@ impl Center {
                 .update(cx, |_, window, _| window.activate_window())
                 .is_ok()
         {
+            self.update_settings(|c| c.record_opened_app(&package), cx);
             return;
         }
         if self.working {
@@ -523,7 +537,13 @@ impl Center {
             .iter()
             .find(|a| a.package_id == package)
             .map(|a| a.label.clone())
-            .unwrap_or_else(|| package.clone());
+            .unwrap_or_else(|| {
+                if package == "dev.glidepod.widgets" {
+                    "GlidePod Widgets".into()
+                } else {
+                    package.clone()
+                }
+            });
         self.working = true;
         self.notice = Some(format!("Opening {title}…"));
         let store = self.store.clone();
@@ -816,6 +836,14 @@ impl Center {
         self.selected_app = None;
         self.app_details = None;
         self.search.update(cx, |input, cx| input.focus(window, cx));
+        // The search field may have just been mounted by switching to Apps.
+        // Wait for its action handler to enter the rendered focus tree.
+        let focus = self.search.read(cx).focus_handle(cx);
+        window.on_next_frame(move |window, cx| {
+            if focus.is_focused(window) {
+                window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+            }
+        });
         cx.notify();
     }
     fn clear_search(&mut self, _: &ClearSearch, window: &mut Window, cx: &mut Context<Self>) {

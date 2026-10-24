@@ -40,8 +40,6 @@ nav button { min-height: 36px; padding: 8px 12px; font-size: 12px; gap: 11px; bo
 nav button svg { width: 18px; height: 18px; }
 nav button:hover { background: #e5ebe3; }
 nav button.active { background: #dce7dc; font-weight: 550; }
-.runtime-mini { padding: 12px 9px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: none; margin-bottom: 10px; }
-.runtime-mini strong { font-weight: 550; }
 .sidebar-link { padding: 7px 9px; font-size: 11px; }
 .sidebar-link:hover { color: var(--text); }
 .toolbar { height: 58px; padding: 0 24px; font-size: 12px; background: #fbfcfa; }
@@ -66,8 +64,6 @@ nav button.active { background: #dce7dc; font-weight: 550; }
 .button.primary:hover:not(:disabled) { background: #284e3e; border-color: #284e3e; }
 .button.soft { box-shadow: none; border: 1px solid transparent; }
 .button.link { box-shadow: none; }
-.toolbar-secondary { background: transparent; border-color: transparent; box-shadow: none; color: var(--muted); }
-.toolbar-secondary:hover:not(:disabled) { background: var(--side); border-color: transparent; }
 kbd { margin-left: 5px; font-size: 10px; opacity: .65; letter-spacing: .4px; }
 .page { padding: 26px 28px 30px; scrollbar-gutter: stable; }
 .page-heading { align-items: flex-start; margin-bottom: 23px; }
@@ -193,7 +189,6 @@ dialog .close-dialog svg { width: 16px; height: 16px; }
 body.dark { --control-line: #4e5e51; --control-hover: #354438; --focus: #94b59d; --focus-halo: #94b59d30; }
 body.dark .toolbar { background: var(--bg); }
 body.dark nav button:hover { background: #303d32; }
-body.dark .runtime-mini { background: none; }
 body.dark .search input::placeholder { color: #8c9e8e; }
 body.dark .search > svg { color: #9dad9e; }
 body.dark .segmented { background: #28342a; border-color: #435045; }
@@ -225,8 +220,6 @@ body.dark .notice.info { background: #304133; color: #b0c6b1; }
   nav button { padding: 9px; }
   .toolbar { height: 55px; padding: 0 13px; }
   .toolbar-actions { gap: 5px !important; }
-  .toolbar-secondary { width: 29px; padding: 5px; }
-  .toolbar-secondary > span { display: none; }
   .toolbar .button.primary { padding: 5px 8px; font-size: 11px; }
   .toolbar .button.primary svg { width: 14px; height: 14px; }
   .page { padding: 22px 15px; }
