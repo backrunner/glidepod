@@ -40,6 +40,7 @@ GlidePod brings Android applications onto the Mac as individual windows, with an
 | [Direct Android Vulkan](implementation/08-native-vulkan.md) | Original NDK workload, Vulkan 1.3 checks, synchronization validation, independent displays and Metal/Software measurements |
 | [Vulkan frame pacing](implementation/09-vulkan-frame-pacing.md) | Perfetto and host frame markers distinguish swapchain queue backpressure from display interruption; corrected measurement scope |
 | [Asynchronous block I/O plan](implementation/10-async-block-io-plan.md) | Follow-up VMM scheduling fix with ordering, persistence and reset gates; not implemented |
+| [Native UI and functional audit](implementation/11-native-ui-audit.md) | Prototype comparison, real native interactions, task-lifecycle repair, guest regressions and measured workspace cleanup |
 | [Icon Composer reconstruction](design/icon-composer/README.md) | Selected B design rebuilt as editable vector layers, clean background, appearance previews and development bundle verification |
 
 ## Open the prototype
