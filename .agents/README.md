@@ -41,6 +41,11 @@ GlidePod brings Android applications onto the Mac as individual windows, with an
 | [Vulkan frame pacing](implementation/09-vulkan-frame-pacing.md) | Perfetto and host frame markers distinguish swapchain queue backpressure from display interruption; corrected measurement scope |
 | [Asynchronous block I/O plan](implementation/10-async-block-io-plan.md) | Follow-up VMM scheduling fix with ordering, persistence and reset gates; not implemented |
 | [Native UI and functional audit](implementation/11-native-ui-audit.md) | Prototype comparison, real native interactions, task-lifecycle repair, guest regressions and measured workspace cleanup |
+| [Upstream and frame performance](implementation/12-upstream-and-frame-performance.md) | November dependency audit, bounded BGRA presentation, host microbenchmark and prioritized runtime follow-up |
+| [VM networking and proxies](implementation/13-vm-network-and-proxy-plan.md) | Implemented system proxy inventory; planned VM-wide proxy enforcement, DNS/UDP coverage and network memory budgets |
+| [Google services and notifications](implementation/14-google-services-and-notifications.md) | Live GMS prerequisites, isolated optional-install candidate, notification coverage fix and separate sign-in/FCM/native acceptance gates |
+| [Google services product workflow](implementation/15-google-services-product-and-system-notifications.md) | Transactional optional installation, removal/recovery and Android system notification delivery |
+| [Source review](implementation/16-source-review.md) | Review corrections, submission checks and explicit validation boundaries |
 | [Icon Composer reconstruction](design/icon-composer/README.md) | Selected B design rebuilt as editable vector layers, clean background, appearance previews and development bundle verification |
 
 ## Open the prototype
@@ -66,3 +71,5 @@ The native Rust/GPUI foundation now exists. The subsequent [Android boot and nat
 - [Apps, windows and experimental Metal](implementation/04-apps-windows-and-metal.md) — installation, per-app displays, Unicode input, launcher bundles and live widget hosting.
 
 - [Independent windows and device input](implementation/05-independent-windows-and-input.md) — continuous keyboard/touch/mouse/controller input, focus cleanup and dual-app Software/Metal verification; physical input acceptance remains pending.
+
+- [Google services product workflow and Android system notifications](implementation/15-google-services-product-and-system-notifications.md)

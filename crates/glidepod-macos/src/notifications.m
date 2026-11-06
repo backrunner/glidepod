@@ -49,9 +49,9 @@ char *glidepod_notifications(const char *json) {
         } else if([op isEqual:@"show"]) {
             UNMutableNotificationContent *content=[UNMutableNotificationContent new];
             content.title=input[@"app_label"];content.subtitle=input[@"title"];content.body=input[@"body"];
-            content.categoryIdentifier=@"GLIDEPOD_APP";content.threadIdentifier=input[@"package_id"];
+            content.categoryIdentifier=@"GLIDEPOD_APP";content.threadIdentifier=input[@"group"]?:input[@"package_id"];
             content.interruptionLevel=[input[@"alerting"] boolValue]?UNNotificationInterruptionLevelActive:UNNotificationInterruptionLevelPassive;
-            content.userInfo=@{@"package_id":input[@"package_id"],@"epoch":input[@"epoch"],@"key":input[@"key"],@"clearable":input[@"clearable"],@"alerting":input[@"alerting"]};
+            content.userInfo=@{@"package_id":input[@"package_id"],@"epoch":input[@"epoch"],@"version":input[@"version"],@"key":input[@"key"],@"clearable":input[@"clearable"],@"alerting":input[@"alerting"]};
             UNNotificationRequest *request=[UNNotificationRequest requestWithIdentifier:input[@"id"] content:content trigger:nil];
             [center addNotificationRequest:request withCompletionHandler:^(NSError *e){if(e)enqueue(@{@"kind":@"error",@"message":e.localizedDescription,@"id":request.identifier});}];
         } else if([op isEqual:@"remove"]) {

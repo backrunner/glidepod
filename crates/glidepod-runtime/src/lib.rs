@@ -3,6 +3,8 @@ mod adb;
 pub mod benchmark;
 pub mod display;
 pub mod experimental;
+pub mod google_apps;
+pub mod google_services;
 pub mod gpu;
 pub mod guest;
 pub mod input;
@@ -140,6 +142,7 @@ impl Store {
         expected_revision: u64,
         change: impl FnOnce(&mut Configuration),
     ) -> Result<Configuration> {
+        let _maintenance = self.maintenance_lock(false)?;
         let mut options = OpenOptions::new();
         options.create(true).truncate(false).read(true).write(true);
         #[cfg(unix)]
@@ -312,7 +315,7 @@ pub fn verify_image(manifest_path: &Path) -> Result<VerifiedImage> {
         }
         ensure!(
             bytes == entry.bytes
-                && format!("{:x}", hash.finalize()).eq_ignore_ascii_case(&entry.sha256),
+                && hex::encode(hash.finalize()).eq_ignore_ascii_case(&entry.sha256),
             "Image digest mismatch: {}",
             entry.path
         );
@@ -344,7 +347,7 @@ mod tests {
             files: vec![ImageFile {
                 path: "system.img".into(),
                 bytes: bytes.len() as u64,
-                sha256: format!("{:x}", Sha256::digest(bytes)),
+                sha256: hex::encode(Sha256::digest(bytes)),
             }],
         };
         let path = dir.join("manifest.json");

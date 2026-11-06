@@ -17,7 +17,7 @@ fn capture(window: &AppWindow, path: PathBuf, after: u64) -> Result<Frame> {
         if let Some(frame) = window.frame(after)? {
             let mut f = std::io::BufWriter::new(fs::File::create(path)?);
             write!(f, "P6\n{} {}\n255\n", frame.width, frame.height)?;
-            for rgba in frame.rgba.as_chunks::<4>().0 {
+            for rgba in frame.pixels.as_chunks::<4>().0 {
                 f.write_all(&rgba[..3])?;
             }
             f.flush()?;
@@ -112,7 +112,10 @@ fn real_guest_app_lifecycle() -> Result<()> {
     a.tap(360, 235)?;
     thread::sleep(Duration::from_millis(300));
     let after = capture(&a, out.join("input-after.ppm"), before.sequence)?;
-    ensure!(before.rgba != after.rgba, "Tap did not change the frame");
+    ensure!(
+        before.pixels != after.pixels,
+        "Tap did not change the frame"
+    );
     capture(&b, out.join("second-display.ppm"), 0)?;
     ensure!(
         a.task_count()? == 1 && b.task_count()? == 1,

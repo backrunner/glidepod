@@ -92,7 +92,10 @@ pub fn inspect(path: &Path) -> Result<ApkReport> {
     let mut total = 0u64;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
-        let name = entry.name().to_owned();
+        let name = entry
+            .name()
+            .context("Invalid APK ZIP entry name")?
+            .into_owned();
         ensure!(names.insert(name.clone()), "Duplicate ZIP entry: {name}");
         ensure!(
             !name.contains('\\')
@@ -148,7 +151,7 @@ pub fn inspect(path: &Path) -> Result<ApkReport> {
             .to_string_lossy()
             .into(),
         bytes: read,
-        sha256: format!("{:x}", hash.finalize()),
+        sha256: hex::encode(hash.finalize()),
         manifest,
         native_abis: abis.into_iter().collect(),
         arm64_candidate,

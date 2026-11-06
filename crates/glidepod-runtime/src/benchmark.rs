@@ -123,7 +123,11 @@ pub struct BenchmarkReport {
     pub host_frames: u64,
     pub host_rgba_bytes: u64,
     pub host_read: Option<Timing>,
+    /// Legacy separate conversion measurement; current reads include normalization.
     pub host_bgra_conversion: Option<Timing>,
+    /// Distinguishes current direct BGRA reads from historical RGBA-then-BGRA runs.
+    #[serde(default)]
+    pub host_frame_path: String,
     pub build_profile: String,
     pub duration_seconds: f64,
     pub guest: serde_json::Value,
@@ -219,7 +223,6 @@ impl Guest {
         let mut count = 0;
         let mut bytes = 0;
         let mut reads = Vec::new();
-        let mut conversions = Vec::new();
         let mut last = None;
         let raw = loop {
             if let Ok(result) = rx.try_recv() {
@@ -231,14 +234,13 @@ impl Guest {
             );
             if r.capture_frames {
                 let before = Instant::now();
-                if let Some(mut frame) = window.frame(seq)? {
+                if let Some(frame) =
+                    window.frame_in_format(seq, crate::display::PixelFormat::Bgra)?
+                {
                     reads.push(before.elapsed().as_secs_f64() * 1000.);
-                    let before = Instant::now();
-                    crate::display::swap_red_blue(&mut frame.rgba);
-                    conversions.push(before.elapsed().as_secs_f64() * 1000.);
                     seq = frame.sequence;
                     count += 1;
-                    bytes += frame.rgba.len() as u64;
+                    bytes += frame.pixels.len() as u64;
                     last = Some(frame);
                 }
             } else {
@@ -283,7 +285,7 @@ impl Guest {
         if vulkan && r.capture_frames {
             ensure!(
                 last.as_ref().is_some_and(|f| f
-                    .rgba
+                    .pixels
                     .as_chunks::<4>()
                     .0
                     .iter()
@@ -338,11 +340,8 @@ impl Guest {
             } else {
                 Some(timing(&reads)?)
             },
-            host_bgra_conversion: if conversions.is_empty() {
-                None
-            } else {
-                Some(timing(&conversions)?)
-            },
+            host_bgra_conversion: None,
+            host_frame_path: "copied_bgra_normalized_during_read".into(),
             build_profile: if cfg!(debug_assertions) {
                 "debug"
             } else {
@@ -358,7 +357,7 @@ impl Guest {
             use std::io::Write;
             let mut file = std::io::BufWriter::new(fs::File::create(out.join("latest.ppm"))?);
             write!(file, "P6\n{} {}\n255\n", f.width, f.height)?;
-            for p in f.rgba.as_chunks::<4>().0 {
+            for p in f.pixels.as_chunks::<4>().0 {
                 file.write_all(&[p[2], p[1], p[0]])?;
             }
             file.flush()?;

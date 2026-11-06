@@ -347,7 +347,7 @@ fn independent_render_and_device_input() -> Result<()> {
                         out.join(format!("display-{i}.ppm")),
                     )?);
                     write!(capture, "P6\n{} {}\n255\n", frame.width, frame.height)?;
-                    for rgba in frame.rgba.as_chunks::<4>().0 {
+                    for rgba in frame.pixels.as_chunks::<4>().0 {
                         capture.write_all(&rgba[..3])?;
                     }
                 }

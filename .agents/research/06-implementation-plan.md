@@ -66,6 +66,8 @@ The layout remains the target architecture. The [foundation implementation recor
 | Graphics | GLES/Vulkan correctness and P0 measurements | Guest/host driver match | Explicit software recovery; block gaming claims on failing tests |
 | Guest | Task/display bridge and authenticated handshake | Image customization | Reconcile actual task state; keep recovery control display visible on request |
 | Host | State machine and same-user runtime service | Protocol schema | Preserve durable desired state; bounded retry and repair actions |
+| Network | [System proxy inventory and VM egress policy](../implementation/13-vm-network-and-proxy-plan.md) | Versioned VMM enforcement, DNS and connector contracts | Required-proxy mode blocks unsupported/failing egress; no silent direct fallback; shared memory budget across NICs |
+| Google services | [Optional GMS installation and qualification](../implementation/14-google-services-and-notifications.md) | Matching SDK/ABI, privileged apps/APEX, transaction recovery, Google terms | Keep component installation, API health, account login, FCM and certification separate; preserve a working profile on failure |
 | UI | GPUI views backed by real runtime state | Model/error taxonomy | No optimistic success without backend confirmation |
 | Integration | Launcher identity, IME, file broker and widgets | Native adapter and guest bridge | Clear partial-success state and targeted repair |
 | Release | Reproducible packaging and license manifest | All dependency locks | Reject missing provenance/signatures; keep previous runtime usable |
@@ -84,6 +86,8 @@ The layout remains the target architecture. The [foundation implementation recor
 | Root enable/disable | Separate Developer data, reboot confirmation, verified effective state and revoked sessions |
 | VM crash / force stop | Durable app data; accurate broken-state UI; no leftover audio/input capture |
 | Renderer loss | Generation invalidation; restart/software recovery; GPU mode label remains truthful |
+| System proxy / VPN / network change | TCP, UDP and DNS coverage verified separately; recording-proxy and destination evidence; proxy failure has no direct escape; scoped DNS/PAC and bounded resource behavior |
+| Google services / Android notifications | Image-compatible installation and rollback; real Google API/login/FCM checks; preinstalled app notifications, private content, permission denial, native replacement/click/dismiss and stopped-VM behavior |
 | Widgets | Binding, configuration, resize, stale state, provider uninstall and action launch |
 | Host integration | TCC denial, expired grants, no clipboard loop, notification identity and media focus |
 | Upgrade and rollback | Matching host/guest protocol, signed atomic update and compatible data restore |

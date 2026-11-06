@@ -1,6 +1,8 @@
 //! Small native probes. Host Metal capability is not Android acceleration evidence.
+pub mod download;
 pub mod gamepad;
 pub mod launchers;
+pub mod network;
 pub mod notifications;
 use serde::{Deserialize, Serialize};
 use std::process::Command;

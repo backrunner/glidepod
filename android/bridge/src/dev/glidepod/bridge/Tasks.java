@@ -28,6 +28,13 @@ public final class Tasks {
         return count;
     }
     public static void main(String[] args) throws Exception {
+        if(args.length==3 && args[0].equals("owner")){
+            int display=Integer.parseInt(args[1]);if(display<=0)throw new IllegalArgumentException("Managed display required");
+            Class<?> api=Class.forName("android.app.IActivityTaskManager");Object service=Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null);
+            List<?> tasks=(List<?>)api.getMethod("getAllRootTaskInfosOnDisplay",int.class).invoke(service,display);
+            String name="";for(Object task:tasks){ComponentName base=(ComponentName)task.getClass().getField("baseActivity").get(task);if(base!=null&&!base.getPackageName().equals("dev.glidepod.notifications")){name=base.getPackageName();break;}}
+            System.out.println(new JSONObject().put("package",name));return;
+        }
         if (args.length != 3 || !(args[0].equals("close") || args[0].equals("count")))
             throw new IllegalArgumentException("Expected close/count display package");
         System.out.println(new JSONObject().put("count", query(Integer.parseInt(args[1]), args[2], args[0].equals("close"))));

@@ -10,7 +10,9 @@ publish.workspace = true
 serde.workspace = true
 anyhow.workspace = true
 sha2.workspace = true
-zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
+hex.workspace = true
+# APK inspection only needs deflate; omit the expensive Zopfli encoder.
+zip = { version = "=9.3.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 tempfile.workspace = true

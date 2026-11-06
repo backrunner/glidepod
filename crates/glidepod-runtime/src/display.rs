@@ -55,13 +55,19 @@ struct FrameSource {
     file: File,
     generation: u32,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelFormat {
+    Bgra,
+    Rgba,
+}
 pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub sequence: u64,
-    pub rgba: Vec<u8>,
+    pub pixels: Vec<u8>,
+    pub format: PixelFormat,
 }
-/// The copied GPUI presentation path uses BGRA pixels. Keep diagnostic work identical to UI work.
+/// Convert between packed RGBA and BGRA, preserving green and alpha.
 pub fn swap_red_blue(pixels: &mut [u8]) {
     for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
@@ -69,6 +75,23 @@ pub fn swap_red_blue(pixels: &mut [u8]) {
 }
 impl Guest {
     pub fn open_app(&self, package: &str, width: u32, height: u32) -> Result<AppWindow> {
+        self.open_target(package, width, height, None)
+    }
+    pub fn open_notification(
+        &self,
+        n: &crate::notifications::AndroidNotification,
+        width: u32,
+        height: u32,
+    ) -> Result<AppWindow> {
+        self.open_target(&n.package_id, width, height, Some(n))
+    }
+    fn open_target(
+        &self,
+        package: &str,
+        width: u32,
+        height: u32,
+        notification: Option<&crate::notifications::AndroidNotification>,
+    ) -> Result<AppWindow> {
         package_id(package)?;
         self.prepare_input()?;
         ensure!(
@@ -93,17 +116,6 @@ impl Guest {
         let (scanout, slot) = (1..16)
             .find_map(|n| lock(&format!("display-{n}.lock")).ok().map(|f| (n, f)))
             .context("All 15 app displays are in use")?;
-        let component = self.shell(&format!("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER {}", quote(package)))?;
-        let component = component
-            .lines()
-            .last()
-            .context("App has no launcher activity")?
-            .trim();
-        ensure!(
-            component.starts_with(&format!("{package}/"))
-                && !component.contains(char::is_whitespace),
-            "App has no launcher activity"
-        );
         self.shell("su 0 cmd overlay fabricate --target android --name glidepod_displays android:bool/config_localDisplaysMirrorContent 0x12 0x0 && su 0 cmd overlay enable com.android.shell:glidepod_displays")?;
         self.shell("wm dismiss-keyguard")?;
         control(self, &format!("display {scanout} {width} {height}"))?;
@@ -144,15 +156,48 @@ impl Guest {
             std::thread::sleep(Duration::from_millis(150));
         }
         self.shell(&format!("wm density 240 -d {}", window.info.display_id))?;
-        let result = self.shell(&format!(
-            "am start -W --display {} -f 0x18000000 -n {}",
-            window.info.display_id,
-            quote(component)
-        ))?;
-        ensure!(
-            !result.contains("Error:"),
-            "Android could not open the app: {result}"
-        );
+        if let Some(notification) = notification {
+            self.activate_notification(notification, window.info.display_id)?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let out = self.bridge(
+                    "dev.glidepod.bridge.Tasks",
+                    &["owner", &window.info.display_id.to_string(), package],
+                )?;
+                let owner: serde_json::Value = serde_json::from_str(out.trim())?;
+                if let Some(target) = owner["package"].as_str().filter(|s| !s.is_empty()) {
+                    package_id(target)?;
+                    window.info.package_id = target.into();
+                    break;
+                }
+                ensure!(
+                    Instant::now() < deadline,
+                    "The Android notification action did not open a visible activity"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        } else {
+            let component=self.shell(&format!("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER {}",quote(package)))?;
+            let component = component
+                .lines()
+                .last()
+                .context("App has no launcher activity")?
+                .trim();
+            ensure!(
+                component.starts_with(&format!("{package}/"))
+                    && !component.contains(char::is_whitespace),
+                "App has no launcher activity"
+            );
+            let result = self.shell(&format!(
+                "am start -W --display {} -f 0x18000000 -n {}",
+                window.info.display_id,
+                quote(component)
+            ))?;
+            ensure!(
+                !result.contains("Error:"),
+                "Android could not open the app: {result}"
+            );
+        }
         Ok(window)
     }
 }
@@ -272,6 +317,15 @@ impl AppWindow {
         Ok(Some(String::from_utf8(bytes)?))
     }
     pub fn frame(&self, last_sequence: u64) -> Result<Option<Frame>> {
+        self.frame_in_format(last_sequence, PixelFormat::Rgba)
+    }
+    /// Read directly in the consumer's format. GPUI needs BGRA; captures need RGBA.
+    /// Conversion runs on the caller's frame worker, never on the UI thread.
+    pub fn frame_in_format(
+        &self,
+        last_sequence: u64,
+        format: PixelFormat,
+    ) -> Result<Option<Frame>> {
         self.guest.verify_epoch()?;
         let mut source = self
             .source
@@ -317,7 +371,7 @@ impl AppWindow {
             }
         }
         let source = source.as_ref().unwrap();
-        read_frame(&source.file, source.generation, last_sequence)
+        read_frame(&source.file, source.generation, last_sequence, format)
     }
 }
 impl Drop for AppWindow {
@@ -337,7 +391,12 @@ impl Drop for AppWindow {
         let _ = control(&self.guest, &format!("display {} off", self.info.scanout));
     }
 }
-fn read_frame(file: &File, generation: u32, previous: u64) -> Result<Option<Frame>> {
+fn read_frame(
+    file: &File,
+    generation: u32,
+    previous: u64,
+    output_format: PixelFormat,
+) -> Result<Option<Frame>> {
     let mut header = [0u8; 64];
     file.read_exact_at(&mut header, 0)?;
     let word = |at| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
@@ -373,9 +432,9 @@ fn read_frame(file: &File, generation: u32, previous: u64) -> Result<Option<Fram
     if sequence == 0 || sequence == previous || index as u64 != sequence % 3 {
         return Ok(None);
     }
-    let mut rgba = vec![0; (stride * height) as usize];
+    let mut pixels = vec![0; (stride * height) as usize];
     file.read_exact_at(
-        &mut rgba,
+        &mut pixels,
         u64::from(offset) + u64::from(index) * u64::from(size),
     )?;
     let mut after = [0u8; 64];
@@ -383,21 +442,143 @@ fn read_frame(file: &File, generation: u32, previous: u64) -> Result<Option<Fram
     if after != header {
         return Ok(None);
     }
-    if format == 0 {
-        for pixel in rgba.as_chunks_mut::<4>().0 {
-            pixel.swap(0, 2);
-        }
+    let input_format = if format == 0 {
+        PixelFormat::Bgra
+    } else {
+        PixelFormat::Rgba
+    };
+    if input_format != output_format {
+        swap_red_blue(&mut pixels);
     }
     Ok(Some(Frame {
         width,
         height,
         sequence,
-        rgba,
+        pixels,
+        format: output_format,
     }))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn frame_file(width: u32, height: u32, format: u32) -> File {
+        let file = tempfile::tempfile().unwrap();
+        let size = width * height * 4;
+        let mut header = [0u8; 64];
+        header[..4].copy_from_slice(b"AVOF");
+        for (offset, value) in [
+            (4, 1u32),
+            (8, 7),
+            (12, width),
+            (16, height),
+            (20, width * 4),
+            (24, format),
+            (28, 3),
+            (32, 4096),
+            (36, size),
+            (40, 1),
+        ] {
+            header[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        header[48..56].copy_from_slice(&1u64.to_le_bytes());
+        file.set_len(4096 + 3 * u64::from(size)).unwrap();
+        file.write_all_at(&header, 0).unwrap();
+        let pixels: Vec<_> = [11, 37, 203, 149]
+            .into_iter()
+            .cycle()
+            .take(size as usize)
+            .collect();
+        file.write_all_at(&pixels, 4096 + u64::from(size)).unwrap();
+        file
+    }
+    #[test]
+    fn frame_formats_preserve_color_and_alpha() {
+        for source in [0, 1] {
+            let file = frame_file(2, 3, source);
+            for format in [PixelFormat::Bgra, PixelFormat::Rgba] {
+                let frame = read_frame(&file, 7, 0, format).unwrap().unwrap();
+                let same = (source == 0) == (format == PixelFormat::Bgra);
+                let pixel = if same {
+                    [11, 37, 203, 149]
+                } else {
+                    [203, 37, 11, 149]
+                };
+                assert_eq!(frame.pixels, pixel.repeat(6));
+                assert_eq!(frame.format, format);
+                assert_eq!((frame.width, frame.height, frame.sequence), (2, 3, 1));
+            }
+        }
+    }
+    #[test]
+    fn frame_reader_rejects_stale_invalid_and_truncated_slots() {
+        let file = frame_file(2, 3, 0);
+        assert!(
+            read_frame(&file, 7, 1, PixelFormat::Bgra)
+                .unwrap()
+                .is_none()
+        );
+        assert!(read_frame(&file, 8, 0, PixelFormat::Bgra).is_err());
+        file.write_all_at(&2u32.to_le_bytes(), 40).unwrap();
+        assert!(
+            read_frame(&file, 7, 0, PixelFormat::Bgra)
+                .unwrap()
+                .is_none()
+        );
+        file.write_all_at(&1u32.to_le_bytes(), 40).unwrap();
+        file.set_len(4096 + 24 + 23).unwrap();
+        assert!(read_frame(&file, 7, 0, PixelFormat::Bgra).is_err());
+    }
+    /// Synthetic host transport only: no guest rendering, GPUI upload or display timing.
+    #[test]
+    #[ignore = "run alone with --ignored --nocapture to measure copied frame costs"]
+    fn copied_frame_benchmark() {
+        use std::hint::black_box;
+        for (width, height) in [(720, 1080), (1080, 1920), (2048, 2048)] {
+            let file = frame_file(width, height, 0);
+            let mut timings = [Vec::new(), Vec::new()];
+            for iteration in 0..330 {
+                // Alternate which path runs first to limit cache/order bias.
+                for path in [iteration % 2, 1 - iteration % 2] {
+                    let start = Instant::now();
+                    let mut frame = read_frame(
+                        &file,
+                        7,
+                        0,
+                        if path == 0 {
+                            PixelFormat::Rgba
+                        } else {
+                            PixelFormat::Bgra
+                        },
+                    )
+                    .unwrap()
+                    .unwrap();
+                    if path == 0 {
+                        swap_red_blue(&mut frame.pixels);
+                    }
+                    black_box(&frame.pixels);
+                    let elapsed = start.elapsed().as_secs_f64() * 1000.;
+                    assert_eq!(&frame.pixels[..4], &[11, 37, 203, 149]);
+                    if iteration >= 30 {
+                        timings[path].push(elapsed);
+                    }
+                }
+            }
+            for (path, values) in timings.iter_mut().enumerate() {
+                values.sort_by(f64::total_cmp);
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "scope": "synthetic_copied_bgra_frame",
+                        "path": if path == 0 { "previous_double_swizzle" } else { "direct_bgra" },
+                        "width": width, "height": height, "samples": values.len(),
+                        "p50_ms": values[values.len() / 2],
+                        "p95_ms": values[values.len() * 95 / 100],
+                        "pixel_bytes": width as u64 * height as u64 * 4,
+                    })
+                );
+            }
+        }
+    }
     #[test]
     fn display_identity_is_exact() {
         let s = "Display id 2: DisplayInfo{uniqueId \"local:123\"}\nDisplay id 3: DisplayInfo{uniqueId \"local:1234\"}";
@@ -408,6 +589,6 @@ mod tests {
     fn corrupt_frame_does_not_allocate() {
         let mut f = tempfile::tempfile().unwrap();
         f.write_all(&[255; 64]).unwrap();
-        assert!(read_frame(&f, 1, 0).is_err());
+        assert!(read_frame(&f, 1, 0, PixelFormat::Rgba).is_err());
     }
 }

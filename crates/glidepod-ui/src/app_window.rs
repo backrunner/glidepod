@@ -1,6 +1,6 @@
 use crate::window_input::{Action, Update, WindowInput, keycode};
 use glidepod_runtime::{
-    display::{AppWindow, Frame},
+    display::{AppWindow, Frame, PixelFormat},
     input::{GamepadState, InputEvent},
 };
 use gpui::{prelude::*, *};
@@ -10,15 +10,28 @@ use gpui_component::{
 };
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, atomic::Ordering},
-    time::Duration,
+    sync::{Arc, Condvar, Mutex, atomic::Ordering},
+    time::{Duration, Instant},
 };
+
+#[derive(Default)]
+struct PendingFrame {
+    value: Mutex<Option<Result<Frame, String>>>,
+    consumed: Condvar,
+}
+
+impl PendingFrame {
+    fn take(&self) -> Option<Result<Frame, String>> {
+        let frame = self.value.lock().unwrap().take();
+        self.consumed.notify_one();
+        frame
+    }
+}
 
 pub struct AndroidWindow {
     input: WindowInput,
-    frames: Arc<Mutex<Option<Result<Frame, String>>>>,
+    frames: Arc<PendingFrame>,
     image: Option<Arc<RenderImage>>,
-    retired: Vec<Arc<RenderImage>>,
     error: Option<String>,
     frame_error: Option<String>,
     closed: bool,
@@ -65,24 +78,47 @@ impl AndroidWindow {
         let display_id = session.info.display_id;
         let session = Arc::new(session);
         let mut input = WindowInput::new(session.clone());
-        let frames = Arc::new(Mutex::new(None));
+        let frames = Arc::new(PendingFrame::default());
         let output = frames.clone();
         let stopped = input.stopped.clone();
         std::thread::spawn(move || {
             let mut sequence = 0;
             while !stopped.load(Ordering::Acquire) {
-                match session.frame(sequence) {
+                // A paused/occluded consumer retains just one pending frame and stops
+                // expensive reads/conversions until drawing resumes. Wake on consumption
+                // rather than losing an entire polling period to a full slot.
+                let pending = output.value.lock().unwrap();
+                let (pending, _) = output
+                    .consumed
+                    .wait_timeout_while(pending, Duration::from_millis(250), |slot| {
+                        slot.is_some() && !stopped.load(Ordering::Acquire)
+                    })
+                    .unwrap();
+                let occupied = pending.is_some();
+                drop(pending);
+                if stopped.load(Ordering::Acquire) {
+                    break;
+                }
+                if occupied {
+                    continue;
+                }
+                let started = Instant::now();
+                match session.frame_in_format(sequence, PixelFormat::Bgra) {
                     Ok(Some(frame)) => {
                         sequence = frame.sequence;
-                        *output.lock().unwrap() = Some(Ok(frame));
+                        *output.value.lock().unwrap() = Some(Ok(frame));
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        *output.lock().unwrap() = Some(Err(format!("{e:#}")));
+                        *output.value.lock().unwrap() = Some(Err(format!("{e:#}")));
                         std::thread::sleep(Duration::from_millis(250));
                     }
                 }
-                std::thread::sleep(Duration::from_millis(16));
+                // Include read/conversion time in the polling period instead of
+                // adding it to every frame interval. Never accumulate catch-up work.
+                std::thread::sleep(
+                    Duration::from_nanos(16_666_667).saturating_sub(started.elapsed()),
+                );
             }
         });
         let focus = cx.focus_handle();
@@ -106,28 +142,7 @@ impl AndroidWindow {
                     .await;
                 if this
                     .update(cx, |this, cx| {
-                        let frame = this.frames.lock().unwrap().take();
-                        if let Some(frame) = frame {
-                            match frame {
-                                Ok(mut frame) => {
-                                    glidepod_runtime::display::swap_red_blue(&mut frame.rgba);
-                                    if let Some(old) = this.image.take() {
-                                        this.retired.push(old);
-                                    }
-                                    if let Some(buffer) = image::RgbaImage::from_raw(
-                                        frame.width,
-                                        frame.height,
-                                        frame.rgba,
-                                    ) {
-                                        this.image =
-                                            Some(Arc::new(RenderImage::new([image::Frame::new(
-                                                buffer,
-                                            )])));
-                                        this.frame_error = None;
-                                    }
-                                }
-                                Err(e) => this.frame_error = Some(e),
-                            }
+                        if this.frames.value.lock().unwrap().is_some() {
                             cx.notify();
                         }
                         while let Ok(update) = this.input.updates.try_recv() {
@@ -174,7 +189,6 @@ impl AndroidWindow {
             input,
             frames,
             image: None,
-            retired: Vec::new(),
             error: None,
             frame_error: None,
             closed: false,
@@ -406,8 +420,25 @@ impl Render for AndroidWindow {
         }
         let dark = gpui_component::Theme::global(cx).mode.is_dark();
         let colors = crate::palette(dark);
-        for image in self.retired.drain(..) {
-            let _ = window.drop_image(image);
+        // Replace images only when GPUI actually draws. Timer updates can continue
+        // while hidden; retaining retired images there would grow without a bound.
+        let frame = self.frames.take();
+        if let Some(frame) = frame {
+            match frame {
+                Ok(frame) => {
+                    debug_assert_eq!(frame.format, PixelFormat::Bgra);
+                    if let Some(buffer) =
+                        image::RgbaImage::from_raw(frame.width, frame.height, frame.pixels)
+                    {
+                        let next = Arc::new(RenderImage::new([image::Frame::new(buffer)]));
+                        if let Some(old) = self.image.replace(next) {
+                            let _ = window.drop_image(old);
+                        }
+                        self.frame_error = None;
+                    }
+                }
+                Err(e) => self.frame_error = Some(e),
+            }
         }
         let available = window.viewport_size();
         let footer = if self.error.is_some() || self.frame_error.is_some() {

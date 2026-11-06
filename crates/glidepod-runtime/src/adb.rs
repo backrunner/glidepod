@@ -10,6 +10,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 const MAX_PACKET: usize = 1024 * 1024;
+fn sync_chunk_size(payload: usize) -> Result<usize> {
+    // DATA's 8-byte sync header shares the WRTE payload. An extra tiny WRTE
+    // incurs another round trip and delayed TCP ACKs in the guest relay.
+    ensure!(payload > 8, "ADB payload cannot fit a sync DATA record");
+    Ok((payload - 8).min(65536))
+}
 fn code(bytes: &[u8; 4]) -> u32 {
     u32::from_le_bytes(*bytes)
 }
@@ -148,7 +154,7 @@ impl Adb {
             response.a >= 0x01000001 && response.b > 0,
             "Unsupported ADB transport version"
         );
-        let payload = (response.b as usize).min(65536);
+        let payload = (response.b as usize).min(MAX_PACKET);
         let mut name = service.as_bytes().to_vec();
         name.push(0);
         transport.write(b"OPEN", 1, 0, &name)?;
@@ -269,16 +275,36 @@ impl Adb {
         ensure!(size <= 2 * 1024 * 1024 * 1024, "Transfer exceeds 2 GiB");
         let mut stream = Self::open(vsock, "sync:", Duration::from_secs(180))?;
         stream.sync_message(b"SEND", format!("{destination},33152").as_bytes())?;
-        let mut buffer = [0u8; 65536];
+        let mut buffer = vec![0u8; sync_chunk_size(stream.payload)?];
+        let records_per_packet = stream.payload / (buffer.len() + 8);
+        let mut batch = Vec::with_capacity(stream.payload);
+        let transfer_deadline = Instant::now() + Duration::from_secs(30 * 60);
         let mut total = 0;
         loop {
-            let n = input.read(&mut buffer)?;
-            if n == 0 {
+            batch.clear();
+            // Keep sync DATA records <=64 KiB, but share one negotiated ADB WRTE
+            // and acknowledgment across several records when the peer permits it.
+            for _ in 0..records_per_packet {
+                let n = input.read(&mut buffer)?;
+                if n == 0 {
+                    break;
+                }
+                total += n as u64;
+                ensure!(total <= size, "Transfer source changed");
+                batch.extend_from_slice(b"DATA");
+                batch.extend_from_slice(&(n as u32).to_le_bytes());
+                batch.extend_from_slice(&buffer[..n]);
+            }
+            if batch.is_empty() {
                 break;
             }
-            total += n as u64;
-            ensure!(total <= size, "Transfer source changed");
-            stream.sync_message(b"DATA", &buffer[..n])?;
+            // A large, progressing file must not hit the small-command lifetime
+            // limit. Retain both an inactivity timeout and a whole-transfer bound.
+            let remaining = transfer_deadline
+                .checked_duration_since(Instant::now())
+                .context("Android file transfer exceeded 30 minutes")?;
+            stream.renew_timeout(Duration::from_secs(180).min(remaining));
+            stream.write_all(&batch)?;
         }
         ensure!(total == size, "Transfer source changed");
         let mut done = b"DONE".to_vec();
@@ -346,6 +372,102 @@ pub fn quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_transfer_preserves_bytes_and_fits_each_sync_record_in_one_packet() -> Result<()> {
+        use std::{fs, os::unix::net::UnixListener, thread};
+        for payload_limit in [4096usize, 65536, MAX_PACKET] {
+            let directory = tempfile::Builder::new()
+                .prefix("gp-adb-")
+                .tempdir_in("/tmp")?;
+            let path = directory.path().join("sock");
+            let source = directory.path().join("source");
+            let expected: Vec<_> = (0..150_019).map(|i| (i % 251) as u8).collect();
+            fs::write(&source, &expected)?;
+            let listener = UnixListener::bind(&path)?;
+            let server = thread::spawn(move || -> Result<Vec<u8>> {
+                let (mut socket, _) = listener.accept()?;
+                socket.set_read_timeout(Some(Duration::from_secs(5)))?;
+                let mut hello = Vec::new();
+                while hello.last() != Some(&b'\n') {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte)?;
+                    hello.push(byte[0]);
+                    ensure!(hello.len() < 64, "Invalid test transport handshake");
+                }
+                ensure!(hello == b"CONNECT 6520\n", "Unexpected test transport");
+                socket.write_all(b"OK 6520\n")?;
+                let mut transport = Transport {
+                    socket,
+                    deadline: Instant::now() + Duration::from_secs(5),
+                };
+                ensure!(
+                    transport.read()?.command == code(b"CNXN"),
+                    "Expected connect"
+                );
+                transport.write(b"CNXN", 0x01000001, payload_limit as u32, b"device::\0")?;
+                let open = transport.read()?;
+                ensure!(
+                    open.command == code(b"OPEN") && open.data == b"sync:\0",
+                    "Expected sync service"
+                );
+                transport.write(b"OKAY", 7, 1, &[])?;
+                let mut received = Vec::new();
+                loop {
+                    let packet = transport.read()?;
+                    ensure!(
+                        packet.command == code(b"WRTE")
+                            && packet.data.len() <= payload_limit
+                            && packet.data.len() >= 8,
+                        "Fragmented or oversized sync record"
+                    );
+                    transport.write(b"OKAY", 7, 1, &[])?;
+                    let mut at = 0;
+                    while at < packet.data.len() {
+                        ensure!(packet.data.len() - at >= 8, "Truncated sync record");
+                        let kind = &packet.data[at..at + 4];
+                        let length =
+                            u32::from_le_bytes(packet.data[at + 4..at + 8].try_into()?) as usize;
+                        at += 8;
+                        if kind != b"DONE" {
+                            ensure!(
+                                length <= packet.data.len() - at,
+                                "Sync record straddled packets"
+                            );
+                        }
+                        match kind {
+                            b"SEND" => ensure!(
+                                packet.data[at..at + length]
+                                    .starts_with(b"/data/local/tmp/glidepod/test,"),
+                                "Wrong transfer target"
+                            ),
+                            b"DATA" => {
+                                ensure!(length <= 65536, "Sync DATA exceeds protocol limit");
+                                received.extend_from_slice(&packet.data[at..at + length]);
+                            }
+                            b"DONE" => {
+                                ensure!(at == packet.data.len(), "Unexpected records after DONE");
+                                transport.write(b"WRTE", 7, 1, b"OKAY\0\0\0\0")?;
+                                ensure!(
+                                    transport.read()?.command == code(b"OKAY"),
+                                    "Missing final acknowledgment"
+                                );
+                                return Ok(received);
+                            }
+                            _ => anyhow::bail!("Unexpected sync operation"),
+                        }
+                        at += length;
+                    }
+                }
+            });
+            let transfer = Adb::push(&path, &source, "/data/local/tmp/glidepod/test");
+            let received = server.join().expect("Mock transport worker panicked")?;
+            transfer?;
+            assert_eq!(received, expected);
+        }
+        assert!(sync_chunk_size(8).is_err());
+        Ok(())
+    }
+
     #[test]
     fn response_ack_precedes_the_next_request_without_breaking_framing() {
         let (socket, peer) = UnixStream::pair().unwrap();

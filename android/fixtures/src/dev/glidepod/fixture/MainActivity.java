@@ -34,6 +34,10 @@ public final class MainActivity extends Activity {
     @Override public boolean dispatchTouchEvent(MotionEvent e){record("touch",e);return super.dispatchTouchEvent(e);}
     @Override public boolean dispatchGenericMotionEvent(MotionEvent e){record("motion",e);return e.isFromSource(InputDevice.SOURCE_JOYSTICK) || super.dispatchGenericMotionEvent(e);}
     @Override protected void onDestroy(){animation.removeCallbacksAndMessages(null);super.onDestroy();}
+    private void notificationClick(android.content.Intent intent) {
+        if(intent.getBooleanExtra("notification_clicked",false))try(FileOutputStream f=openFileOutput("notification-click.txt",MODE_PRIVATE)){f.write("OPENED".getBytes("UTF-8"));}catch(Exception e){throw new RuntimeException(e);}
+    }
+    @Override protected void onNewIntent(android.content.Intent intent){super.onNewIntent(intent);setIntent(intent);notificationClick(intent);}
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         try {
@@ -48,16 +52,21 @@ public final class MainActivity extends Activity {
                 catch(SecurityException e){result="DENIED";}
                 try(FileOutputStream f=openFileOutput("provider-probe.txt",MODE_PRIVATE)){f.write(result.getBytes("UTF-8"));}
             }
+            notificationClick(getIntent());
             String notify=getIntent().getStringExtra("notification");
             if(notify!=null){
                 android.app.NotificationManager manager=getSystemService(android.app.NotificationManager.class);
                 manager.createNotificationChannel(new android.app.NotificationChannel("fixture","Acceptance messages",android.app.NotificationManager.IMPORTANCE_DEFAULT));
-                if(notify.equals("cancel"))manager.cancelAll();
+                if(notify.equals("bulk")){
+                    Handler queue=new Handler(Looper.getMainLooper());
+                    for(int i=0;i<40;i++){final int id=200+i;queue.postDelayed(()->manager.notify(id,new android.app.Notification.Builder(this,"fixture").setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Pagination fixture "+id).setContentText("Synthetic page item").setVisibility(android.app.Notification.VISIBILITY_PUBLIC).build()),i*250L);}
+                }
+                else if(notify.equals("cancel"))manager.cancelAll();
                 else {
-                    int id=notify.equals("private")?102:notify.equals("secret")?103:101;
+                    int id=notify.equals("private")?102:notify.equals("secret")?103:notify.equals("ongoing")?104:notify.equals("group")?105:101;
                     int visibility=id==102?android.app.Notification.VISIBILITY_PRIVATE:id==103?android.app.Notification.VISIBILITY_SECRET:android.app.Notification.VISIBILITY_PUBLIC;
-                    android.app.PendingIntent content=android.app.PendingIntent.getActivity(this,0,new android.content.Intent(this,MainActivity.class),android.app.PendingIntent.FLAG_IMMUTABLE|android.app.PendingIntent.FLAG_UPDATE_CURRENT);
-                    manager.notify(id,new android.app.Notification.Builder(this,"fixture").setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("GlidePod fixture " + notify).setContentText("Synthetic notification · 中文 😀").setContentIntent(content).setVisibility(visibility).setAutoCancel(true).build());
+                    android.app.PendingIntent content=android.app.PendingIntent.getActivity(this,0,new android.content.Intent(this,MainActivity.class).setAction("dev.glidepod.fixture.NOTIFICATION").setFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP|android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra("notification_clicked",true),android.app.PendingIntent.FLAG_IMMUTABLE|android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+                    manager.notify(id,new android.app.Notification.Builder(this,"fixture").setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("GlidePod fixture " + notify).setContentText("Synthetic notification · 中文 😀").setContentIntent(content).setVisibility(visibility).setOngoing(notify.equals("ongoing")).setGroup(notify.equals("group")?"fixture-group":null).setGroupSummary(notify.equals("group")).setAutoCancel(!notify.equals("ongoing")).build());
                 }
             }
         }catch(Exception e){throw new RuntimeException(e);}

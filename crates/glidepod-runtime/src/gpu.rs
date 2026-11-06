@@ -70,6 +70,7 @@ impl Store {
         Ok(Some(serde_json::from_reader(file)?))
     }
     pub fn register_gpu(&self, directory: &Path) -> Result<ExperimentalGpu> {
+        let _maintenance = self.maintenance_lock(false)?;
         let _guard = self.session_lock()?;
         let gpu = ExperimentalGpu::from_local(directory)?;
         gpu.verify()?;

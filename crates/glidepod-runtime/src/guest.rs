@@ -46,7 +46,7 @@ pub struct InstallReceipt {
 }
 
 pub fn package_id(value: &str) -> Result<()> {
-    ensure!(!value.is_empty() && value.len() <= 255 && value.contains('.') && value.split('.').all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')), "Invalid Android package ID");
+    ensure!(!value.is_empty() && value.len() <= 255 && (value == "android" || value.contains('.')) && value.split('.').all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')), "Invalid Android package ID");
     Ok(())
 }
 pub fn resource(name: &str) -> Result<PathBuf> {
@@ -185,9 +185,37 @@ impl Guest {
             "/data/local/tmp/glidepod/input-bridge.jar",
         )?;
         self.install(&apk, None)?;
+        // Package Manager can acknowledge the APK before InputMethodManager has
+        // processed its service-added broadcast, especially during a busy boot.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let methods = self.shell("ime list -a -s")?;
+            if methods.lines().any(|line| {
+                matches!(
+                    line.trim(),
+                    "dev.glidepod.input/.MacInput"
+                        | "dev.glidepod.input/dev.glidepod.input.MacInput"
+                )
+            }) {
+                break;
+            }
+            ensure!(
+                std::time::Instant::now() < deadline,
+                "Android has not discovered the GlidePod input method; try opening the app again"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
         self.shell(
             "ime enable dev.glidepod.input/.MacInput && ime set dev.glidepod.input/.MacInput",
         )?;
+        let selected = self.shell("settings get secure default_input_method")?;
+        ensure!(
+            matches!(
+                selected.trim(),
+                "dev.glidepod.input/.MacInput" | "dev.glidepod.input/dev.glidepod.input.MacInput"
+            ),
+            "Android did not select the GlidePod input method"
+        );
         fs::write(marker, value)?;
         Ok(())
     }

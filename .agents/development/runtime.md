@@ -61,6 +61,19 @@ The management center provides APK review, app launching, per-app storage and pe
 
 Each app window has Text/Game keyboard modes and Touch/Mouse pointer modes. `⌘⇧K` and `⌘⇧M` switch them; Option-drag in Touch mode supplies two mirrored contacts. One compatible extended gamepad follows the active window, and focus changes release held input. Relative pointer capture, multiple players and rumble remain open. Physical device and native presentation validation are separate from guest event tests.
 
+## Network diagnostics
+
+```sh
+target/debug/glidepodctl network
+target/debug/glidepodctl --json network
+```
+
+This reads macOS HTTP/HTTPS/SOCKS and PAC configuration without starting a VM or changing network settings. It omits proxy credentials and PAC URLs. It does not test reachability or evaluate PAC. The pinned VMM currently uses host sockets and does **not** apply system proxy preferences; host VPN/TUN coverage depends on the actual routing policy. See the [network implementation plan](../implementation/13-vm-network-and-proxy-plan.md) for TCP, UDP, DNS, strict proxy mode and resource limits. Proxy forwarding is not implemented yet.
+
+## Google services
+
+Google service prerequisites in a running guest can be inspected with `target/debug/glidepodctl --data-dir PATH gms` (add `--json` before `gms` for structured output). Package presence is not a sign-in, FCM or certification result. The [Google services record](../implementation/14-google-services-and-notifications.md) describes the optional-install experiment and native notification requirements.
+
 ## Graphics diagnostics
 
 ```sh
@@ -71,3 +84,9 @@ target/debug/glidepodctl benchmark --api vulkan --validation --samples 60
 See [Vulkan correctness and performance](../implementation/08-native-vulkan.md) and [frame pacing](../implementation/09-vulkan-frame-pacing.md). Validation layers are diagnostic and must not be enabled in performance comparisons. Current presentation reads frames back to the host; it is not zero-copy. Producer FPS does not measure native-window latency.
 
 The [asynchronous block I/O proposal](../implementation/10-async-block-io-plan.md) is still planned. The latest investigation distinguishes swapchain queue backpressure from a separate host/guest scheduling delay; neither should be presented as a completed performance fix.
+
+## Optional Google services
+
+Settings → Google services provides installation, removal, cancellation and interrupted-transaction recovery for the Android 17 ARM64 Developer runtime. CLI: `glidepodctl google-services install|remove|recover|status`. Existing Android data is preserved through candidate-disk promotion; see [transaction and notification behavior](../implementation/15-google-services-product-and-system-notifications.md). The installation record is bound to the image inventory; restore that runtime before booting or removing an installation after an incompatible image change.
+
+Settings → Notifications forwards all entries Android exposes to its notification listener, including system, ongoing and grouped notifications. Private/secret entries keep their place with redacted content. macOS permission is required. Neither Google API availability nor remote FCM is inferred from this local relay.

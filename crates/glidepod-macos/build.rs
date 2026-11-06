@@ -2,15 +2,20 @@ fn main() {
     println!("cargo:rerun-if-changed=src/hvf_probe.c");
     println!("cargo:rerun-if-changed=src/gamepad.m");
     println!("cargo:rerun-if-changed=src/notifications.m");
+    println!("cargo:rerun-if-changed=src/network.m");
+    println!("cargo:rerun-if-changed=src/download.m");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()
             .file("src/gamepad.m")
             .file("src/notifications.m")
+            .file("src/network.m")
+            .file("src/download.m")
             .flag("-fobjc-arc")
             .warnings_into_errors(true)
             .compile("glidepod_gamepad");
         println!("cargo:rustc-link-lib=framework=GameController");
         println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rustc-link-lib=framework=CFNetwork");
         println!("cargo:rustc-link-lib=framework=UserNotifications");
     }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")

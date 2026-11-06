@@ -1,6 +1,7 @@
 mod app_window;
 mod assets;
 mod controls;
+mod google_apps_ui;
 mod management_ui;
 mod notification_bridge;
 mod views;
@@ -171,6 +172,7 @@ struct AppSession {
     center: Option<WindowHandle<Root>>,
     windows: std::collections::HashMap<String, WindowHandle<app_window::AndroidWindow>>,
     notifications: notification_bridge::NotificationBridge,
+    google: Arc<Mutex<google_apps_ui::GoogleJob>>,
 }
 impl Global for AppSession {}
 struct Center {
@@ -204,6 +206,9 @@ struct Center {
     receiver: mpsc::Receiver<Work>,
     sender: mpsc::Sender<Work>,
     incoming: Arc<Mutex<Vec<PathBuf>>>,
+    google_revision: u64,
+    google_installed: bool,
+    google_recovery: bool,
     _subscriptions: Vec<Subscription>,
 }
 impl Center {
@@ -253,6 +258,9 @@ impl Center {
         .detach();
         let runtime = store.runtime_status().expect("Read runtime status");
         Self {
+            google_revision: 0,
+            google_installed: store.google_apps_installation().ok().flatten().is_some(),
+            google_recovery: store.google_apps_recovery_pending(),
             apps: store.cached_apps().unwrap_or_default(),
             selected_app: None,
             app_details: None,
@@ -409,6 +417,29 @@ impl Center {
             }
             cx.notify();
         }
+        let google = cx.global::<AppSession>().google.clone();
+        {
+            let state = google.lock().unwrap();
+            if state.revision != self.google_revision {
+                self.google_revision = state.revision;
+                self.working = state.busy;
+                self.notice = Some(state.message.clone());
+                if !state.busy {
+                    self.google_installed = self
+                        .store
+                        .google_apps_installation()
+                        .ok()
+                        .flatten()
+                        .is_some();
+                    self.google_recovery = self.store.google_apps_recovery_pending();
+                    self.catalog_epoch = None;
+                }
+                cx.notify();
+            }
+            if state.busy {
+                self.working = true;
+            }
+        }
         self.windows
             .retain(|_, window| window.update(cx, |_, _, _| {}).is_ok());
         cx.global_mut::<AppSession>().windows = self.windows.clone();
@@ -433,6 +464,22 @@ impl Center {
                     store.runtime_status().map_err(|e| format!("{e:#}")),
                 ));
             });
+        }
+        if !self.working {
+            let pending = cx.global::<AppSession>().notifications.opens.clone();
+            let open = {
+                let mut q = pending.lock().unwrap();
+                if q.is_empty() {
+                    None
+                } else {
+                    Some(q.remove(0))
+                }
+            };
+            if let Some((epoch, n)) = open
+                && matches!(self.runtime.vm,VmState::Running{epoch:e} if e==epoch)
+            {
+                self.open_notification(n, cx);
+            }
         }
         if !self.working && self.apk.is_none() {
             let path = self.incoming.lock().ok().and_then(|mut q| {
@@ -517,6 +564,45 @@ impl Center {
                 .and_then(|g| g.install(&path, Some(&hash)))
                 .map(|r| format!("Installed {}", r.package_id));
             let _ = sender.send(Work::Installed(result.map_err(|e| format!("{e:#}"))));
+        });
+        cx.notify();
+    }
+    fn open_notification(
+        &mut self,
+        n: glidepod_runtime::notifications::AndroidNotification,
+        cx: &mut Context<Self>,
+    ) {
+        self.working = true;
+        let store = self.store.clone();
+        let sender = self.sender.clone();
+        let existing = self.windows.get(&n.package_id).and_then(|w| {
+            w.update(cx, |v, w, _| {
+                w.activate_window();
+                v.display_id
+            })
+            .ok()
+        });
+        std::thread::spawn(move || {
+            if let Some(display) = existing {
+                let result = store
+                    .guest()
+                    .and_then(|g| g.activate_notification(&n, display))
+                    .map(|_| "Android notification opened.".into());
+                let _ = sender.send(Work::Image(result.map_err(|e| format!("{e:#}"))));
+            } else {
+                let result = store
+                    .guest()
+                    .and_then(|g| g.open_notification(&n, 720, 1080));
+                // Reuse the notifier's window on later clicks, even when a system
+                // notification opened a different package such as Android Settings.
+                // AppWindow still owns cleanup for the actual target task.
+                let package = n.package_id;
+                let _ = sender.send(Work::Opened(
+                    package,
+                    n.app_label,
+                    result.map_err(|e| format!("{e:#}")),
+                ));
+            }
         });
         cx.notify();
     }
@@ -909,6 +995,7 @@ fn main() -> anyhow::Result<()> {
             center: None,
             windows: Default::default(),
             notifications,
+            google: Arc::new(Mutex::new(google_apps_ui::GoogleJob::default())),
         });
         apply_theme(config.dark_mode, cx);
         cx.bind_keys([
@@ -946,8 +1033,17 @@ fn main() -> anyhow::Result<()> {
                         .lock()
                         .map(|q| !q.is_empty())
                         .unwrap_or(false);
+                    let notification_pending = !cx
+                        .global::<AppSession>()
+                        .notifications
+                        .opens
+                        .lock()
+                        .unwrap()
+                        .is_empty();
                     let existing = cx.global::<AppSession>().center;
-                    if pending && existing.is_none_or(|h| h.update(cx, |_, _, _| {}).is_err()) {
+                    if (pending || notification_pending)
+                        && existing.is_none_or(|h| h.update(cx, |_, _, _| {}).is_err())
+                    {
                         let _ = open_center(cx);
                     }
                 });

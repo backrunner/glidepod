@@ -17,6 +17,15 @@ struct Args {
 enum Operation {
     /// Read actual host capabilities without creating a VM.
     Doctor,
+    /// Inspect macOS system proxies and the pinned VMM's coverage; no traffic or settings changes.
+    Network,
+    /// Inventory Google services in the running guest; does not claim API or certification success.
+    Gms,
+    /// Install, remove or recover optional Google services with transactional disk recovery.
+    GoogleServices {
+        #[arg(value_enum)]
+        action: GoogleAction,
+    },
     /// Execute an isolated ARM64 guest instruction and a Metal compute workload.
     Probe,
     /// Read runtime truth. No backend is reported ready before qualification.
@@ -130,6 +139,13 @@ enum Operation {
     RuntimeWorker,
 }
 #[derive(Clone, Copy, ValueEnum)]
+enum GoogleAction {
+    Install,
+    Remove,
+    Recover,
+    Status,
+}
+#[derive(Clone, Copy, ValueEnum)]
 enum ProfileChoice {
     Personal,
     Developer,
@@ -199,6 +215,81 @@ fn run(args: Args) -> Result<()> {
                 .collect::<Vec<_>>()
                 .join("\n");
             (serde_json::to_value(report)?, summary, passed)
+        }
+        Operation::Network => {
+            let proxy = glidepod_macos::network::system_proxy_snapshot()?;
+            let summary = format!(
+                "macOS system proxy snapshot\nHTTP: {}\nHTTPS: {}\nSOCKS: {}\nPAC enabled: {} · Auto discovery: {}\nBypass rules: {} · Exclude simple hostnames: {}\nPinned VMM: host sockets; system proxy settings are not applied.\nThis is configuration discovery. Proxy reachability and VPN routing have not been tested.",
+                proxy.http.summary(),
+                proxy.https.summary(),
+                proxy.socks.summary(),
+                proxy.pac_enabled,
+                proxy.auto_discovery_enabled,
+                proxy.bypass_rule_count,
+                proxy.exclude_simple_hostnames,
+            );
+            (
+                serde_json::json!({
+                    "schema_version": 1,
+                    "scope": "system_proxy_inventory_and_pinned_backend_source_audit",
+                    "system_proxy": proxy,
+                    "pinned_backend": {
+                        "revision": glidepod_runtime::experimental::ENGINE_REVISION,
+                        "egress": "host_sockets",
+                        "ip_version": "ipv4_only",
+                        "system_proxy_applied": false,
+                        "dns": "forwarded_to_resolv_conf_nameserver",
+                    },
+                    "proxy_reachability_tested": false,
+                    "vpn_routing_verified": false,
+                    "pac_evaluated": false,
+                    "settings_changed": false,
+                }),
+                summary,
+                true,
+            )
+        }
+        Operation::GoogleServices { action } => {
+            let store = store()?;
+            match action {
+                GoogleAction::Status => println!(
+                    "{}",
+                    serde_json::json!({"installation":store.google_apps_installation()?,"recovery_pending":store.google_apps_recovery_pending()})
+                ),
+                GoogleAction::Recover => store.recover_google_apps()?,
+                GoogleAction::Install | GoogleAction::Remove => {
+                    static CANCEL: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    extern "C" fn cancel(_: libc::c_int) {
+                        CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    unsafe {
+                        libc::signal(libc::SIGINT, cancel as *const () as libc::sighandler_t);
+                    }
+                    store.manage_google_apps(
+                        &std::env::current_exe()?,
+                        if matches!(action, GoogleAction::Install) {
+                            glidepod_runtime::google_apps::Action::Install
+                        } else {
+                            glidepod_runtime::google_apps::Action::Remove
+                        },
+                        &CANCEL,
+                        &mut |p| {
+                            if args.json {
+                                println!("{}", serde_json::to_string(&p).unwrap());
+                            } else {
+                                println!("{}", p.message);
+                            }
+                        },
+                    )?;
+                }
+            }
+            return Ok(());
+        }
+        Operation::Gms => {
+            let report = store()?.guest()?.google_services()?;
+            let summary = report.summary();
+            (serde_json::to_value(report)?, summary, true)
         }
         Operation::Status => {
             let s = store()?.snapshot()?;
@@ -472,7 +563,7 @@ fn run(args: Args) -> Result<()> {
                 use std::io::Write;
                 let mut file = std::fs::File::create(path)?;
                 write!(file, "P6\n{} {}\n255\n", frame.width, frame.height)?;
-                for rgba in frame.rgba.as_chunks::<4>().0 {
+                for rgba in frame.pixels.as_chunks::<4>().0 {
                     file.write_all(&rgba[..3])?;
                 }
             } else {

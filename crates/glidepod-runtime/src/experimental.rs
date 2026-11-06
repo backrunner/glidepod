@@ -24,6 +24,7 @@ pub const ENGINE_REVISION: &str = "99153258763a9ccdf5d4c6de36bd631e4dd0dded";
 const LIMIT: u64 = 64 * 1024;
 const BOOT_TIMEOUT: Duration = Duration::from_secs(120);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
+const WORKER_READY: &str = "GLIDEPOD_WORKER_READY\n";
 const REQUIRED: &[&str] = &[
     "boot.img",
     "init_boot.img",
@@ -134,7 +135,7 @@ pub(crate) fn digest(path: &Path) -> Result<String> {
         }
         hash.update(&buffer[..n]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,6 +213,25 @@ impl Store {
             .context("An Android session is already starting or running")?;
         Ok(file)
     }
+    fn startup_lock(&self) -> Result<File> {
+        // Read-only status queries also take the lock while inspecting stale
+        // records. Allow those brief readers to finish; never bypass a live owner.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match self.session_lock() {
+                Ok(lock) => return Ok(lock),
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::WouldBlock)
+                        && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
     pub fn experimental_runtime(&self) -> Result<Option<ExperimentalRuntime>> {
         let path = self.root().join("experimental-runtime.json");
         if !path.exists() {
@@ -222,6 +242,7 @@ impl Store {
         Ok(Some(result))
     }
     pub fn register_experimental(&self, runtime: &ExperimentalRuntime) -> Result<()> {
+        let _maintenance = self.maintenance_lock(false)?;
         let _lock = self.session_lock()?;
         runtime.verify()?;
         atomic_json(&self.root().join("experimental-runtime.json"), runtime)?;
@@ -304,7 +325,7 @@ impl Store {
             self.experimental_runtime()?.is_some(),
             "Register an experimental runtime first"
         );
-        let _lock = self.session_lock()?;
+        let _lock = self.startup_lock()?;
         // The worker acquires this same lock after spawn, before touching disks.
         drop(_lock);
         let log = OpenOptions::new()
@@ -318,24 +339,38 @@ impl Store {
             .arg(self.root())
             .arg("runtime-worker")
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(log)
             .spawn()
             .context("Start runtime supervisor")?;
         let input = child.stdin.take().context("Supervisor input missing")?;
+        let output = child
+            .stdout
+            .take()
+            .context("Supervisor readiness pipe missing")?;
         // Reap the helper even after its UI owner has closed. EOF requests shutdown.
         thread::spawn(move || {
             let _ = child.wait();
         });
         let owner = RuntimeOwner { input: Some(input) };
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while self.session_lock().is_ok() {
-            ensure!(
-                Instant::now() < deadline,
-                "Supervisor did not acquire the session lock. See supervisor.log."
-            );
-            thread::sleep(Duration::from_millis(25));
-        }
+        // A status reader can briefly hold session.lock too. Only this child's
+        // private pipe can acknowledge that the new supervisor acquired it.
+        let (ready_tx, ready_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut line = String::new();
+            let result = BufReader::new(output)
+                .take(65)
+                .read_line(&mut line)
+                .map(|_| line);
+            let _ = ready_tx.send(result);
+        });
+        let ready = ready_rx
+            .recv_timeout(Duration::from_secs(3))
+            .context("Supervisor readiness timed out. See supervisor.log.")??;
+        ensure!(
+            ready == WORKER_READY,
+            "Supervisor did not become ready. See supervisor.log."
+        );
         Ok(owner)
     }
 }
@@ -398,8 +433,16 @@ impl Drop for SocketPath {
 
 /// Runs inside the signed helper. stdin EOF is a lifetime signal, never a guest shell command.
 pub fn run_worker(store: &Store) -> Result<()> {
-    let _lock = store.session_lock()?;
-    let result = worker_inner(store);
+    let maintenance = store.maintenance_lock(false)?;
+    let _lock = store.startup_lock()?;
+    std::io::stdout().write_all(WORKER_READY.as_bytes())?;
+    std::io::stdout().flush()?;
+    let result = (|| {
+        store.recover_google_apps_locked()?;
+        store.check_google_apps_image()?;
+        drop(maintenance);
+        worker_inner(store)
+    })();
     if let Err(error) = &result {
         let mut status = RuntimeStatus::idle(true);
         status.vm = VmState::Failed {
@@ -796,5 +839,64 @@ mod tests {
         let pid = child.id();
         drop(OwnedChild(child));
         assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+    }
+    #[test]
+    fn startup_waits_for_its_child_not_a_concurrent_status_reader() -> Result<()> {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let directory = tempfile::tempdir()?;
+        let store = Store::new(directory.path().into())?;
+        store.update(0, |c| c.active_profile = ProfileId::Developer)?;
+        for name in REQUIRED {
+            fs::write(directory.path().join(name), b"fixture")?;
+        }
+        let runtime = ExperimentalRuntime::from_local(
+            Path::new("/usr/bin/true"),
+            directory.path(),
+            "fixture".into(),
+        )?;
+        store.register_experimental(&runtime)?;
+        let helper = directory.path().join("helper.sh");
+        fs::write(
+            &helper,
+            "#!/bin/sh\ntouch \"$2/helper-started\"\nsleep 0.3\ntouch \"$2/helper-ready\"\nprintf 'GLIDEPOD_WORKER_READY\\n'\ncat >/dev/null\n",
+        )?;
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700))?;
+        let finished = Arc::new(AtomicBool::new(false));
+        let observed = finished.clone();
+        let reader_store = store.clone();
+        let reader = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !reader_store.root().join("helper-started").exists() && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let lock = loop {
+                if let Ok(lock) = reader_store.session_lock() {
+                    break Some(lock);
+                }
+                if observed.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                    break None;
+                }
+                thread::sleep(Duration::from_millis(1));
+            };
+            while !observed.load(Ordering::Relaxed) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            drop(lock);
+        });
+        let result = store.start_experimental(&helper);
+        let acknowledged = store.root().join("helper-ready").exists();
+        finished.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
+        let owner = result?;
+        drop(owner);
+        assert!(
+            acknowledged,
+            "A status reader was mistaken for the new worker"
+        );
+        Ok(())
     }
 }

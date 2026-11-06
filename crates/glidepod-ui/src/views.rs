@@ -6,7 +6,7 @@ use gpui_component::TitleBar;
 // Keep the full runtime catalog available for widget/settings operations, while
 // every library view and its search/counts use only user-facing installed apps.
 fn is_library_app(app: &glidepod_runtime::guest::AndroidApp) -> bool {
-    !app.system
+    (!app.system || app.package_id == "com.android.vending")
         && !matches!(
             app.package_id.as_str(),
             "dev.glidepod.input" | "dev.glidepod.widgets" | "dev.glidepod.notifications"
@@ -955,12 +955,24 @@ impl Center {
             .w_full()
 
             .child(self.section("General", general))
+            .child(self.section("Google services",self.group()
+                .child(self.row("Google Play services",self.caption(if self.google_installed {"Installed · sign-in available"} else {"Optional"})))
+                .child(self.caption("For the Android 17 ARM64 Developer profile. Downloads 519 MiB from MindTheGapps. Android stops while a recoverable copy is prepared. Google account sign-in and device compatibility depend on Google.").px(px(14.)).pb(px(12.)))
+                .child(div().flex().gap(px(8.)).px(px(14.)).pb(px(12.))
+                    .child(button("google-install",if self.google_installed{"Remove Google services…"}else{"Install Google services"})
+                        .disabled(self.working || self.google_recovery || self.config.active_profile!=ProfileId::Developer || !self.runtime.configured)
+                        .on_click(cx.listener(|this,_,w,cx|this.manage_google(Some(if this.google_installed{glidepod_runtime::google_apps::Action::Remove}else{glidepod_runtime::google_apps::Action::Install}),w,cx))))
+                    .when(self.google_installed,|d|d.child(button("google-open-store","Open Play Store").disabled(self.working || self.config.active_profile!=ProfileId::Developer).on_click(cx.listener(|this,_,_,cx|{
+                        if matches!(this.runtime.vm,VmState::Running{..}) {this.open_app("com.android.vending".into(),cx);}else{this.pending_launch=Some("com.android.vending".into());this.start_android(cx);}
+                    }))))
+                    .when(self.google_recovery,|d|d.child(button("google-recover","Recover Android").disabled(self.working).on_click(cx.listener(|this,_,w,cx|this.manage_google(None,w,cx)))))
+                    .when(cx.global::<AppSession>().google.lock().unwrap().busy,|d|d.child(button("google-cancel","Cancel").on_click(cx.listener(|this,_,_,cx|this.cancel_google(cx))))))))
             .child(self.section("Notifications",self.group()
-                .child(self.row("Android app notifications",Switch::new("notification-forwarding").checked(self.config.notifications_enabled).tooltip("Android app notifications")
+                .child(self.row("All Android notifications",Switch::new("notification-forwarding").checked(self.config.notifications_enabled).tooltip("All Android notifications")
                     .disabled(self.working || (!self.config.notifications_enabled && !matches!(self.runtime.vm,VmState::Running{..})))
                     .on_click(cx.listener(|this,_,_,cx|this.toggle_notifications(cx)))))
                 .child(self.caption(cx.global::<AppSession>().notifications.status.lock().unwrap().clone()).px(px(14.)).pb(px(12.)))
-                .child(self.caption("Uses Android notification access and macOS notification permission. Private content stays hidden; click opens the app, dismissal clears dismissible Android notifications.").px(px(14.)).pb(px(12.)))))
+                .child(self.caption("Uses Android notification access and macOS notification permission. Includes system apps, ongoing notifications and groups. Private content stays hidden. Click follows the Android notification; dismissal only clears notifications Android allows to be dismissed.").px(px(14.)).pb(px(12.)))))
             .child(
                 self.section(
                     "About",
