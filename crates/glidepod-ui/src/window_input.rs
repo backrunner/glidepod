@@ -14,6 +14,9 @@ use std::{
 };
 static NEXT_LEASE: AtomicU64 = AtomicU64::new(1);
 static ACTIVE_LEASE: AtomicU64 = AtomicU64::new(0);
+pub(crate) fn active_lease() -> u64 {
+    ACTIVE_LEASE.load(Ordering::SeqCst)
+}
 // Serializes Android focus and IME commands, which operate on the focused editor.
 static EDITOR: Mutex<Option<std::sync::Weak<Mutex<InputSession>>>> = Mutex::new(None);
 // Keep the old session reachable until its final release is serialized with new focus.
@@ -43,7 +46,6 @@ pub enum Update {
     Ready,
     Closed,
     Error(String),
-    Clipboard(String),
 }
 struct Queue {
     items: VecDeque<(u64, Action)>,
@@ -165,9 +167,8 @@ impl WindowInput {
                                 let _editor = EDITOR.lock().unwrap();
                                 if owner == lease && lease == ACTIVE_LEASE.load(Ordering::SeqCst) {
                                     match window.edit_action(action) {
-                                        Ok(Some(text)) => {
+                                        Ok(Some(_)) => {
                                             let _ = tx.send(Update::Ready);
-                                            let _ = tx.send(Update::Clipboard(text));
                                         }
                                         Ok(None) => {}
                                         Err(e) => {
@@ -206,6 +207,9 @@ impl WindowInput {
     }
     pub fn active(&self) -> bool {
         self.lease != 0 && self.lease == ACTIVE_LEASE.load(Ordering::SeqCst)
+    }
+    pub fn lease(&self) -> u64 {
+        if self.active() { self.lease } else { 0 }
     }
     pub fn activate(&mut self) {
         self.lease = NEXT_LEASE.fetch_add(1, Ordering::SeqCst);
@@ -391,13 +395,10 @@ mod tests {
         let mut ia = WindowInput::new(a.clone());
         let mut ib = WindowInput::new(b.clone());
         let wait_ready = |input: &WindowInput| -> anyhow::Result<()> {
-            loop {
-                match input.updates.recv_timeout(Duration::from_secs(8))? {
-                    Update::Ready => return Ok(()),
-                    Update::Error(e) => anyhow::bail!(e),
-                    Update::Clipboard(_) => {}
-                    Update::Closed => anyhow::bail!("App task closed unexpectedly"),
-                }
+            match input.updates.recv_timeout(Duration::from_secs(8))? {
+                Update::Ready => Ok(()),
+                Update::Error(e) => anyhow::bail!(e),
+                Update::Closed => anyhow::bail!("App task closed unexpectedly"),
             }
         };
         let send = |input: &mut WindowInput, action: Action| -> anyhow::Result<()> {

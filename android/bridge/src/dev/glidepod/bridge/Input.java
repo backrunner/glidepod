@@ -132,8 +132,10 @@ public final class Input {
         do {
             List<?> tasks=(List<?>)api.getMethod("getAllRootTaskInfosOnDisplay",int.class).invoke(service,display);
             for(Object task:tasks) {
-                ComponentName top=(ComponentName)task.getClass().getField("topActivity").get(task);
-                if(top!=null && packageName.equals(top.getPackageName())) {
+                // A picker/share child can have another package while the original app
+                // remains the base owner of this task on its exclusively leased display.
+                ComponentName base=(ComponentName)task.getClass().getField("baseActivity").get(task);
+                if(base!=null && packageName.equals(base.getPackageName())) {
                     int id=task.getClass().getField("taskId").getInt(task);
                     api.getMethod("setFocusedTask",int.class).invoke(service,id);
                     while(focusedDisplay()!=display && SystemClock.uptimeMillis()<deadline) Thread.sleep(5);
@@ -163,6 +165,10 @@ public final class Input {
         switch(op) {
             case "key": key(obj.getInt("code"),obj.getBoolean("down"),obj.getInt("meta")); break;
             case "touch": touch(obj.getJSONArray("points")); break;
+            case "cancel_touch":
+                try { if (!touches.isEmpty()) touchEvent(MotionEvent.ACTION_CANCEL); }
+                finally { touches.clear(); }
+                break;
             case "mouse": mouse(obj.getJSONArray("state")); break;
             case "pad": pad(obj.getInt("buttons"),obj.getJSONArray("axes")); break;
             default: throw new IOException("Unknown input operation");

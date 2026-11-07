@@ -265,14 +265,29 @@ impl Adb {
         decode_shell(&bytes)
     }
     pub fn push(vsock: &Path, source: &Path, destination: &str) -> Result<()> {
+        Self::push_file(
+            vsock,
+            &mut File::open(source)?,
+            destination,
+            2 * 1024 * 1024 * 1024,
+        )
+    }
+    pub(crate) fn push_file(
+        vsock: &Path,
+        input: &mut File,
+        destination: &str,
+        limit: u64,
+    ) -> Result<()> {
         ensure!(
             destination.starts_with("/data/local/tmp/glidepod/")
                 && !destination.contains([',', '\0']),
             "Invalid staging destination"
         );
-        let mut input = File::open(source)?;
         let size = input.metadata()?.len();
-        ensure!(size <= 2 * 1024 * 1024 * 1024, "Transfer exceeds 2 GiB");
+        ensure!(
+            size <= limit && input.metadata()?.is_file(),
+            "Invalid transfer file or size"
+        );
         let mut stream = Self::open(vsock, "sync:", Duration::from_secs(180))?;
         stream.sync_message(b"SEND", format!("{destination},33152").as_bytes())?;
         let mut buffer = vec![0u8; sync_chunk_size(stream.payload)?];
@@ -325,6 +340,69 @@ impl Adb {
             String::from_utf8_lossy(&reply)
         );
         Ok(())
+    }
+    pub(crate) fn pull(vsock: &Path, source: &str, output: &mut File, size: u64) -> Result<()> {
+        ensure!(
+            source.starts_with("/data/local/tmp/glidepod/export-")
+                && source.ends_with(".bin")
+                && source
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.'),
+            "Invalid export source"
+        );
+        let mut stream = Self::open(vsock, "sync:", Duration::from_secs(180))?;
+        stream.sync_message(b"RECV", source.as_bytes())?;
+        let mut pending = Vec::new();
+        let mut total = 0u64;
+        let deadline = Instant::now() + Duration::from_secs(1800);
+        loop {
+            while pending.len() >= 8 {
+                let id = &pending[..4];
+                let n = u32::from_le_bytes(pending[4..8].try_into().unwrap()) as usize;
+                if id == b"DONE" {
+                    ensure!(
+                        total == size && pending.len() == 8,
+                        "Truncated or trailing Android export"
+                    );
+                    return Ok(());
+                }
+                ensure!(
+                    n <= 65536 && (id == b"DATA" || id == b"FAIL"),
+                    "Invalid Android export record"
+                );
+                if pending.len() < 8 + n {
+                    break;
+                }
+                ensure!(
+                    &pending[..4] != b"FAIL",
+                    "Android could not read the export snapshot"
+                );
+                total = total
+                    .checked_add(n as u64)
+                    .context("Export size overflow")?;
+                ensure!(total <= size, "Android export exceeded expected size");
+                output.write_all(&pending[8..8 + n])?;
+                pending.drain(..8 + n);
+            }
+            stream.renew_timeout(
+                Duration::from_secs(180).min(
+                    deadline
+                        .checked_duration_since(Instant::now())
+                        .context("Export timed out")?,
+                ),
+            );
+            let chunk = stream
+                .read_chunk()?
+                .context("Android export ended before completion")?;
+            ensure!(
+                pending.len() + chunk.len() <= MAX_PACKET + 65544,
+                "Export buffer limit exceeded"
+            );
+            pending.extend(chunk);
+        }
     }
     fn sync_message(&mut self, id: &[u8; 4], bytes: &[u8]) -> Result<()> {
         let mut message = id.to_vec();

@@ -34,12 +34,15 @@ GlidePod is an open-source Android environment for Apple Silicon Macs, built wit
 | --- | --- |
 | **Apps** | APK install, update and removal; searchable catalog; APK file association; per-user Mac launcher bundles. |
 | **Windows** | Independent Android displays and GPUI windows, with separate frame and input workers per app. |
-| **Input** | Unicode text and clipboard, held keyboard events, touch/mouse modes, two-contact gestures and native GameController mapping. |
+| **Input** | Unicode text, system clipboard bridges for text/images/files, held keyboard events, touch/mouse modes, macOS trackpad scrolling/pinch/rotation and native GameController mapping. |
+| **Files** | Window-owned Mac file/image panels, compatible app drops, Save to Mac and automatic completed public-download export; no shared-directory setup. |
 | **Management** | Developer VM start/stop and resources; app storage, cache/data cleanup and Android runtime permissions. |
 | **Desktop integration** | Live Android widget panels and opt-in notification forwarding. Native WidgetKit support is still planned. |
 | **Graphics** | Software baseline and an experimental gfxstream → MoltenVK → Metal path; dedicated GLES 3 and Vulkan correctness/performance fixtures. |
 
-Real guest checks have exercised app lifecycle, independent displays/input, storage, permissions, GLES 3 and direct Vulkan. Physical keyboard/IME, mouse and controller behavior, current native notification interactions, Launchpad indexing and end-to-end presentation latency still need broader on-device validation. See the [implementation records](.agents/README.md) for the scope of each result.
+Real guest checks have exercised app lifecycle, independent displays/input, storage, permissions, GLES 3 and direct Vulkan. Physical keyboard/IME, mouse, trackpad and controller behavior, current native notification interactions, Launchpad indexing and end-to-end presentation latency still need broader on-device validation. See the [implementation records](.agents/README.md) for the scope of each result.
+
+Host file integration is implemented for the pinned Developer image. Drops use supported app Share actions; custom galleries and arbitrary drop targets remain app-dependent. Native Finder/panel interaction still needs unlocked-session acceptance, and Photos-library selection is not yet included. See the [implementation and acceptance record](.agents/implementation/17-host-files-and-clipboard-plan.md).
 
 <details>
 <summary><strong>Native management center preview</strong></summary>
@@ -98,6 +101,7 @@ Relative mouse capture, controller rumble and multiple players are also pending.
 
 - **[Architecture and research](.agents/README.md)** — decisions, references and the interactive design prototype.
 - **[Independent windows and input](.agents/implementation/05-independent-windows-and-input.md)** — display ownership, input routing and acceptance boundaries.
+- **[Touch and trackpad gestures](.agents/implementation/18-touch-and-trackpad-input.md)** — coordinate checks, native gesture mapping, game-input limits and Android recognition evidence.
 - **[GLES 3](.agents/implementation/07-gles3-metal.md)** and **[Vulkan](.agents/implementation/08-native-vulkan.md)** — original workloads, renderer patch and measured limits.
 - **[Frame pacing investigation](.agents/implementation/09-vulkan-frame-pacing.md)** — what the traces establish and what remains unresolved.
 - **[Icon source](assets/README.md)** — the editable layered package mark in Icon Composer.

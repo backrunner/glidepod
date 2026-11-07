@@ -38,6 +38,7 @@ pub enum InputEvent {
     Ping,
     Key { code: u32, down: bool, meta: u32 },
     Touch { points: Vec<(u32, f32, f32)> },
+    CancelTouch,
     Mouse { state: (f32, f32, u32, f32, f32) },
     Pad { buttons: u32, axes: [f32; 8] },
 }

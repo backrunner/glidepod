@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.glidepod.input" android:versionCode="1" android:versionName="0.1">
   <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="36"/>
   <application android:label="GlidePod Input">
+    <provider android:name=".ClipboardBridge" android:authorities="dev.glidepod.input.clipboard" android:exported="true" android:permission="android.permission.DUMP"/>
     <service android:name=".MacInput" android:label="GlidePod Input" android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true">
       <intent-filter><action android:name="android.view.InputMethod"/></intent-filter>
       <meta-data android:name="android.view.im" android:resource="@xml/method"/>

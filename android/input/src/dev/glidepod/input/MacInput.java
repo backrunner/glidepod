@@ -18,10 +18,21 @@ public final class MacInput extends InputMethodService {
             String action = intent.getStringExtra("action");
             if ("copy".equals(action) || "cut".equals(action)) {
                 CharSequence selected = connection.getSelectedText(0);
-                if (selected == null || selected.length() > 16384) return;
+                if (!connection.performContextMenuAction("copy".equals(action) ? android.R.id.copy : android.R.id.cut)) return;
+                // The legacy return is a selection snapshot, never a pasteboard write.
+                // ClipboardBridge observes the app's completed system Copy/Cut action.
+                if (selected == null || selected.length() > 16384) selected="";
                 setResultData(Base64.encodeToString(selected.toString().getBytes(StandardCharsets.UTF_8),Base64.NO_WRAP));
-                if ("cut".equals(action)) connection.commitText("",1);
                 setResultCode(1); return;
+            }
+            if ("paste".equals(action)) {
+                ClipData clip=getSystemService(ClipboardManager.class).getPrimaryClip();
+                if(clip!=null&&clip.getItemCount()==1&&clip.getItemAt(0).getUri()!=null&&editor.contentMimeTypes!=null) {
+                    for(String accepted:editor.contentMimeTypes)for(int i=0;i<clip.getDescription().getMimeTypeCount();i++) {
+                        if(ClipDescription.compareMimeTypes(clip.getDescription().getMimeType(i),accepted)&&connection.commitContent(new InputContentInfo(clip.getItemAt(0).getUri(),clip.getDescription(),null),InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION,null)){setResultCode(1);return;}
+                    }
+                }
+                if (connection.performContextMenuAction(android.R.id.paste)) setResultCode(1); return;
             }
             if ("select_all".equals(action)) { if (connection.performContextMenuAction(android.R.id.selectAll)) setResultCode(1); return; }
             if (encoded == null || encoded.length() > 32768) return;

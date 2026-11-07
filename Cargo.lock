@@ -2265,6 +2265,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "image",
+ "raw-window-handle",
  "serde_json",
 ]
 

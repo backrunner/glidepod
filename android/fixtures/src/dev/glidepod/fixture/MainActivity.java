@@ -11,6 +11,12 @@ public final class MainActivity extends Activity {
     int clicks;
     private long ticks;
     private final Handler animation = new Handler(Looper.getMainLooper());
+    private ScaleGestureDetector scaleDetector;
+    private double totalScale=1;
+    private void save(String name, JSONObject value) {
+        try(FileOutputStream f=openFileOutput(name,MODE_PRIVATE)){f.write(value.toString().getBytes("UTF-8"));}
+        catch(Exception e){throw new RuntimeException(e);}
+    }
     private void record(String kind, InputEvent event) {
         try {
             JSONObject o=new JSONObject().put("kind",kind).put("display",getDisplay().getDisplayId()).put("time",SystemClock.uptimeMillis());
@@ -25,13 +31,17 @@ public final class MainActivity extends Activity {
             }
             if(event instanceof MotionEvent) {
                 MotionEvent m=(MotionEvent)event; o.put("action",m.getActionMasked()).put("pointers",m.getPointerCount()).put("x",m.getX()).put("y",m.getY()).put("buttons",m.getButtonState());
+                o.put("action_index",m.getActionIndex()).put("event_time",m.getEventTime()).put("down_time",m.getDownTime());
+                JSONArray contacts=new JSONArray();
+                for(int i=0;i<m.getPointerCount();i++) contacts.put(new JSONArray().put(m.getPointerId(i)).put(m.getRawX(i)).put(m.getRawY(i)));
+                o.put("contacts",contacts);
                 JSONArray axes=new JSONArray(); for(int axis:new int[]{0,1,11,14,17,18,15,16,9,10}) axes.put(m.getAxisValue(axis)); o.put("axes",axes);
             }
             try(FileOutputStream f=openFileOutput("events.jsonl",MODE_APPEND)){f.write((o.toString()+"\n").getBytes("UTF-8"));}
         }catch(Exception e){throw new RuntimeException(e);}
     }
     @Override public boolean dispatchKeyEvent(KeyEvent e){record("key",e);return e.isFromSource(InputDevice.SOURCE_GAMEPAD) || super.dispatchKeyEvent(e);}
-    @Override public boolean dispatchTouchEvent(MotionEvent e){record("touch",e);return super.dispatchTouchEvent(e);}
+    @Override public boolean dispatchTouchEvent(MotionEvent e){record("touch",e);if(scaleDetector!=null)scaleDetector.onTouchEvent(e);return super.dispatchTouchEvent(e);}
     @Override public boolean dispatchGenericMotionEvent(MotionEvent e){record("motion",e);return e.isFromSource(InputDevice.SOURCE_JOYSTICK) || super.dispatchGenericMotionEvent(e);}
     @Override protected void onDestroy(){animation.removeCallbacksAndMessages(null);super.onDestroy();}
     private void notificationClick(android.content.Intent intent) {
@@ -40,6 +50,14 @@ public final class MainActivity extends Activity {
     @Override protected void onNewIntent(android.content.Intent intent){super.onNewIntent(intent);setIntent(intent);notificationClick(intent);}
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        scaleDetector=new ScaleGestureDetector(this,new ScaleGestureDetector.SimpleOnScaleGestureListener(){
+            @Override public boolean onScaleBegin(ScaleGestureDetector detector){totalScale=1;return true;}
+            @Override public boolean onScale(ScaleGestureDetector detector){
+                totalScale*=detector.getScaleFactor();
+                try{save("scale.json",new JSONObject().put("factor",detector.getScaleFactor()).put("span",detector.getCurrentSpan()).put("total_scale",totalScale));}
+                catch(Exception e){throw new RuntimeException(e);} return true;
+            }
+        });
         try {
             if(getIntent().getBooleanExtra("seed_storage",false)) {
                 try(FileOutputStream f=new FileOutputStream(new File(getFilesDir(),"persistent.bin"))){f.write(new byte[2*1024*1024]);}
@@ -75,7 +93,16 @@ public final class MainActivity extends Activity {
         TextView heading = new TextView(this); heading.setText("GlidePod Android test"); heading.setTextSize(26); layout.addView(heading);
         TextView display = new TextView(this); display.setText("Display " + getDisplay().getDisplayId()); layout.addView(display);
         EditText input = new EditText(this); input.setSingleLine(true); input.setHint("Type from macOS"); layout.addView(input);
-        Button button = new Button(this); button.setText("Tap count: 0"); button.setOnClickListener(v -> { button.setText("Tap count: " + (++clicks)); }); layout.addView(button);
+        Button button = new Button(this); button.setText("Tap count: 0"); button.setOnClickListener(v -> {
+            button.setText("Tap count: " + (++clicks));
+            try{save("clicks.json",new JSONObject().put("clicks",clicks));}catch(Exception e){throw new RuntimeException(e);}
+        }); layout.addView(button);
+        button.getViewTreeObserver().addOnGlobalLayoutListener(()->{
+            int[] p=new int[2];button.getLocationOnScreen(p);
+            try{save("target.json",new JSONObject().put("x",p[0]+button.getWidth()/2.0).put("y",p[1]+button.getHeight()/2.0)
+                .put("minimum_scale_span",ViewConfiguration.get(this).getScaledMinimumScalingSpan()).put("touch_slop",ViewConfiguration.get(this).getScaledTouchSlop()));}
+            catch(Exception e){throw new RuntimeException(e);}
+        });
         TextView ticker=new TextView(this); layout.addView(ticker);
         Runnable tick=new Runnable(){public void run(){ticker.setText("Independent frame " + (++ticks)); animation.postDelayed(this,100);}};
         animation.post(tick);

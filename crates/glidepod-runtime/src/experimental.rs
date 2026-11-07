@@ -315,6 +315,12 @@ impl Store {
             .context("No responsive Android session to stop")
     }
     pub fn start_experimental(&self, helper: &Path) -> Result<RuntimeOwner> {
+        self.spawn_supervisor(helper, false)
+    }
+    pub(crate) fn start_candidate(&self, helper: &Path) -> Result<RuntimeOwner> {
+        self.spawn_supervisor(helper, true)
+    }
+    fn spawn_supervisor(&self, helper: &Path, candidate: bool) -> Result<RuntimeOwner> {
         let c = self.load()?;
         validate_start(
             c.active_profile,
@@ -338,6 +344,10 @@ impl Store {
             .arg("--data-dir")
             .arg(self.root())
             .arg("runtime-worker")
+            .env(
+                "GLIDEPOD_INTERNAL_CANDIDATE",
+                if candidate { "1" } else { "0" },
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(log)
@@ -437,11 +447,21 @@ pub fn run_worker(store: &Store) -> Result<()> {
     let _lock = store.startup_lock()?;
     std::io::stdout().write_all(WORKER_READY.as_bytes())?;
     std::io::stdout().flush()?;
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let input_closed = cancelled.clone();
+    thread::spawn(move || {
+        let mut sink = [0u8; 128];
+        while matches!(std::io::stdin().read(&mut sink), Ok(1..)) {}
+        input_closed.store(true, std::sync::atomic::Ordering::Release);
+    });
     let result = (|| {
         store.recover_google_apps_locked()?;
         store.check_google_apps_image()?;
         drop(maintenance);
-        worker_inner(store)
+        if std::env::var("GLIDEPOD_INTERNAL_CANDIDATE").as_deref() != Ok("1") {
+            store.prepare_host_files(&std::env::current_exe()?, &cancelled)?;
+        }
+        worker_inner(store, cancelled)
     })();
     if let Err(error) = &result {
         let mut status = RuntimeStatus::idle(true);
@@ -453,7 +473,10 @@ pub fn run_worker(store: &Store) -> Result<()> {
     }
     result
 }
-fn worker_inner(store: &Store) -> Result<()> {
+fn worker_inner(
+    store: &Store,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<()> {
     let config = store.load()?;
     validate_start(
         config.active_profile,
@@ -475,15 +498,9 @@ fn worker_inner(store: &Store) -> Result<()> {
         ..RuntimeStatus::idle(true)
     };
     atomic_json(&store.root().join("session-status.json"), &status)?;
-    let (closed_tx, closed_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut sink = [0u8; 128];
-        while matches!(std::io::stdin().read(&mut sink), Ok(1..)) {}
-        let _ = closed_tx.send(());
-    });
     runtime.verify()?;
     // Do not boot after an owner disappeared during image verification.
-    if closed_rx.try_recv().is_ok() {
+    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
         atomic_json(
             &store.root().join("session-status.json"),
             &RuntimeStatus::idle(true),
@@ -575,9 +592,10 @@ fn worker_inner(store: &Store) -> Result<()> {
     let mut stop_at: Option<Instant> = None;
     let mut stop_sent = false;
     let mut failure = None;
+    let mut _exports = None;
     loop {
         // Keep shutdown independent of guest readiness and the UI thread.
-        if closed_rx.try_recv().is_ok() {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) && stop_at.is_none() {
             begin_stop(&mut lifecycle, &mut status, epoch, &mut stop_at)?;
         }
         for _ in 0..8 {
@@ -688,6 +706,16 @@ fn worker_inner(store: &Store) -> Result<()> {
                                 status.fingerprint = Some(fingerprint.into());
                                 status.message = if gpu.is_some() { "Android is running with experimental Metal rendering. Game compatibility is not qualified." } else { "Android is running with software rendering. Guest root access verified." }.into();
                                 atomic_json(&store.root().join("session-status.json"), &status)?;
+                                if std::env::var("GLIDEPOD_INTERNAL_CANDIDATE").as_deref()
+                                    != Ok("1")
+                                {
+                                    _exports = Some(crate::files::ExportWorker::start(
+                                        crate::guest::Guest {
+                                            store: store.clone(),
+                                            endpoints: status.endpoints.clone().unwrap(),
+                                        },
+                                    ));
+                                }
                             }
                         }
                     }

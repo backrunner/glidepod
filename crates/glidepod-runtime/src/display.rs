@@ -297,7 +297,7 @@ impl AppWindow {
     }
     pub fn edit_action(&self, action: &str) -> Result<Option<String>> {
         ensure!(
-            ["copy", "cut", "select_all"].contains(&action),
+            ["copy", "cut", "select_all", "paste"].contains(&action),
             "Invalid edit action"
         );
         let reply = self.guest.shell(&format!("am broadcast --receiver-foreground -a dev.glidepod.input.COMMIT -p dev.glidepod.input --es package {} --es action {}",quote(&self.info.package_id),quote(action)))?;
@@ -305,7 +305,7 @@ impl AppWindow {
             reply.contains("Broadcast completed: result=1"),
             "Select text in an editable field before using this shortcut"
         );
-        if action == "select_all" {
+        if action == "select_all" || action == "paste" {
             return Ok(None);
         }
         let encoded = reply

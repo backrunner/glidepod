@@ -16,6 +16,7 @@ glidepod-installer.workspace = true
 gpui = "=0.2.2"
 gpui-component = "=0.5.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
+raw-window-handle = "0.6"
 
 [[bin]]
 name = "glidepod"

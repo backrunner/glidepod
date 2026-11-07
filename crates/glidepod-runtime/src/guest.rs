@@ -126,9 +126,19 @@ impl Guest {
             .strip_prefix("Result: Bundle[{json=")
             .and_then(|s| s.strip_suffix("}]"))
             .map(str::to_owned)
-            .context("Android helper provider returned an invalid response")
+            .with_context(|| {
+                format!("Android helper {authority}.{method} returned an invalid response")
+            })
     }
     pub(crate) fn bridge(&self, class: &str, args: &[&str]) -> Result<String> {
+        self.bridge_timeout(class, args, Duration::from_secs(30))
+    }
+    pub(crate) fn bridge_timeout(
+        &self,
+        class: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<String> {
         self.verify_epoch()?;
         let path = resource("glidepod-bridge.jar")?;
         // Content-addressed paths avoid replacing a JAR while another helper is reading it.
@@ -145,17 +155,32 @@ impl Guest {
             .open(self.store.root().join("bridge.lock"))?;
         lock.lock_exclusive()?;
         if fs::read_to_string(&marker).ok().as_deref() != Some(&value) {
-            self.shell("mkdir -p /data/local/tmp/glidepod")?;
+            self.shell("mkdir -p /data/local/tmp/glidepod; chmod 700 /data/local/tmp/glidepod")?;
             Adb::push(&self.endpoints.vsock, &path, &remote)?;
             fs::write(marker, value)?;
         }
         drop(lock);
-        self.shell(&format!(
-            "CLASSPATH={} app_process / {} {}",
-            quote(&remote),
-            quote(class),
-            args.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ")
-        ))
+        // DownloadManager's all_downloads permission is signature-only. The
+        // Developer image's internal service uses root only for these two
+        // read-only, public-download-filtered operations, never for app writes.
+        let identity = if class == "dev.glidepod.bridge.Files"
+            && args
+                .first()
+                .is_some_and(|a| ["downloads", "download"].contains(a))
+        {
+            "su 0 env "
+        } else {
+            ""
+        };
+        self.shell_timeout(
+            &format!(
+                "{identity}CLASSPATH={} app_process / {} {}",
+                quote(&remote),
+                quote(class),
+                args.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ")
+            ),
+            timeout,
+        )
     }
     pub(crate) fn prepare_input(&self) -> Result<()> {
         let lock = OpenOptions::new()

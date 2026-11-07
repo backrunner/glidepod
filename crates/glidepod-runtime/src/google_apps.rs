@@ -63,7 +63,7 @@ fn check_cancel(cancel: &AtomicBool) -> Result<()> {
     );
     Ok(())
 }
-fn disk_lock(instance: &Path) -> Result<Option<File>> {
+pub(crate) fn disk_lock(instance: &Path) -> Result<Option<File>> {
     let path = instance.join("vm.lock");
     if !path.exists() {
         return Ok(None);
@@ -73,11 +73,11 @@ fn disk_lock(instance: &Path) -> Result<Option<File>> {
         .context("An Android engine still owns this disk; wait for shutdown before recovery")?;
     Ok(Some(file))
 }
-fn sync_dir(path: &Path) -> Result<()> {
+pub(crate) fn sync_dir(path: &Path) -> Result<()> {
     File::open(path)?.sync_all()?;
     Ok(())
 }
-fn record<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(crate) fn record<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     atomic_json(path, value)?;
     sync_dir(path.parent().context("Missing parent")?)
 }
@@ -89,7 +89,7 @@ fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     );
     Ok(serde_json::from_reader(f)?)
 }
-fn image_identity(store: &Store) -> Result<String> {
+pub(crate) fn image_identity(store: &Store) -> Result<String> {
     use sha2::{Digest, Sha256};
     let runtime = store
         .experimental_runtime()?
@@ -113,7 +113,7 @@ impl Store {
         } else {
             FileExt::try_lock_shared(&file)
         }
-        .context("Google services maintenance is in progress")?;
+        .context("Android system maintenance is in progress")?;
         Ok(file)
     }
     pub fn google_apps_installation(&self) -> Result<Option<Installation>> {
@@ -422,13 +422,16 @@ impl Store {
         Ok(())
     }
 }
-fn clone_instance(source: &Path, target: &Path, cancel: &AtomicBool) -> Result<()> {
+pub(crate) fn clone_instance(source: &Path, target: &Path, cancel: &AtomicBool) -> Result<()> {
     fs::create_dir_all(target)?;
     for entry in fs::read_dir(source)? {
         check_cancel(cancel)?;
         let entry = entry?;
         let from = entry.path();
-        if from.extension().and_then(|s| s.to_str()) != Some("img") && entry.file_name() != RECORD {
+        if from.extension().and_then(|s| s.to_str()) != Some("img")
+            && entry.file_name() != RECORD
+            && entry.file_name() != "host-files.json"
+        {
             continue;
         }
         ensure!(
@@ -456,13 +459,13 @@ fn clone_instance(source: &Path, target: &Path, cancel: &AtomicBool) -> Result<(
     }
     sync_dir(target)
 }
-struct Candidate {
-    store: Store,
-    owner: Option<RuntimeOwner>,
+pub(crate) struct Candidate {
+    pub(crate) store: Store,
+    pub(crate) owner: Option<RuntimeOwner>,
 }
 impl Candidate {
-    fn start(&mut self, helper: &Path, cancel: &AtomicBool) -> Result<Guest> {
-        self.owner = Some(self.store.start_experimental(helper)?);
+    pub(crate) fn start(&mut self, helper: &Path, cancel: &AtomicBool) -> Result<Guest> {
+        self.owner = Some(self.store.start_candidate(helper)?);
         let deadline = Instant::now() + Duration::from_secs(140);
         loop {
             check_cancel(cancel)?;
@@ -478,7 +481,7 @@ impl Candidate {
             thread::sleep(Duration::from_millis(200));
         }
     }
-    fn stop(&mut self) -> Result<()> {
+    pub(crate) fn stop(&mut self) -> Result<()> {
         if self.store.runtime_status()?.active() {
             let _ = self.store.stop_vm();
         }
@@ -498,7 +501,7 @@ impl Drop for Candidate {
         let _ = self.stop();
     }
 }
-fn root_shell(guest: &Guest, script: &str) -> Result<String> {
+pub(crate) fn root_shell(guest: &Guest, script: &str) -> Result<String> {
     guest
         .shell_timeout(
             &format!(

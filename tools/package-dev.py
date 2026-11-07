@@ -29,7 +29,7 @@ def main():
     run("codesign", "--force", "--sign", "-", macos / "glidepod-launcher")
     shutil.copy2(macos / "glidepod-launcher", ROOT / "target/debug/glidepod-launcher")
     (resources / "android").mkdir(exist_ok=True)
-    for name in ("glidepod-bridge.jar", "glidepod-widgets.apk", "glidepod-input.apk", "glidepod-notifications.apk", "glidepod-benchmark.apk", "glidepod-vulkan.apk"):
+    for name in ("glidepod-bridge.jar", "glidepod-widgets.apk", "glidepod-input.apk", "glidepod-files.apk", "glidepod-notifications.apk", "glidepod-benchmark.apk", "glidepod-vulkan.apk"):
         shutil.copy2(ROOT / "target/android" / name, resources / "android" / name)
     icon_work = ROOT / ".cache/icon-compiled"
     icon_work.mkdir(parents=True, exist_ok=True)

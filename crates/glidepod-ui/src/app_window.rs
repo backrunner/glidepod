@@ -1,4 +1,6 @@
+use crate::touch_gestures::{Surface, TouchGestures};
 use crate::window_input::{Action, Update, WindowInput, keycode};
+use glidepod_macos::gestures::Gestures;
 use glidepod_runtime::{
     display::{AppWindow, Frame, PixelFormat},
     input::{GamepadState, InputEvent},
@@ -8,6 +10,7 @@ use gpui_component::{
     Icon, Sizable,
     button::{Button, ButtonVariants},
 };
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
     collections::HashMap,
     sync::{Arc, Condvar, Mutex, atomic::Ordering},
@@ -30,6 +33,7 @@ impl PendingFrame {
 
 pub struct AndroidWindow {
     input: WindowInput,
+    files: crate::host_files::HostFiles,
     frames: Arc<PendingFrame>,
     image: Option<Arc<RenderImage>>,
     error: Option<String>,
@@ -40,6 +44,8 @@ pub struct AndroidWindow {
     height: u32,
     pub(crate) display_id: u32,
     bounds: Bounds<Pixels>,
+    gestures: Option<Gestures>,
+    touch_gestures: TouchGestures,
     touch_down: bool,
     touch_second: bool,
     mouse_buttons: u32,
@@ -78,6 +84,7 @@ impl AndroidWindow {
         let display_id = session.info.display_id;
         let session = Arc::new(session);
         let mut input = WindowInput::new(session.clone());
+        let files = crate::host_files::HostFiles::new(session.clone(), input.stopped.clone());
         let frames = Arc::new(PendingFrame::default());
         let output = frames.clone();
         let stopped = input.stopped.clone();
@@ -133,6 +140,7 @@ impl AndroidWindow {
             } else {
                 this.input.deactivate();
             }
+            this.files.focus(this.input.lease());
             cx.notify();
         });
         cx.spawn(async move |this, cx| {
@@ -142,7 +150,8 @@ impl AndroidWindow {
                     .await;
                 if this
                     .update(cx, |this, cx| {
-                        if this.frames.value.lock().unwrap().is_some() {
+                        this.poll_gestures();
+                        if this.frames.value.lock().unwrap().is_some() || this.files.due() {
                             cx.notify();
                         }
                         while let Ok(update) = this.input.updates.try_recv() {
@@ -150,11 +159,13 @@ impl AndroidWindow {
                                 Update::Ready => this.error = None,
                                 Update::Closed => this.closed = true,
                                 Update::Error(e) => this.error = Some(e),
-                                Update::Clipboard(t) => {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(t))
-                                }
                             }
                             cx.notify();
+                        }
+                        if let Some(lease) = this.files.take_paste()
+                            && lease == this.input.lease()
+                        {
+                            this.send(Action::Edit("paste"));
                         }
                         if this.input.active() {
                             let controller = glidepod_macos::gamepad::poll();
@@ -187,6 +198,7 @@ impl AndroidWindow {
         .detach();
         Self {
             input,
+            files,
             frames,
             image: None,
             error: None,
@@ -197,6 +209,8 @@ impl AndroidWindow {
             height,
             display_id,
             bounds: Bounds::default(),
+            gestures: None,
+            touch_gestures: TouchGestures::default(),
             touch_down: false,
             touch_second: false,
             mouse_buttons: 0,
@@ -210,6 +224,10 @@ impl AndroidWindow {
         }
     }
     fn clear_local_input(&mut self) {
+        self.touch_gestures.clear();
+        if let Some(gestures) = &mut self.gestures {
+            gestures.configure([0.; 4], false, false);
+        }
         self.touch_down = false;
         self.touch_second = false;
         self.mouse_buttons = 0;
@@ -229,18 +247,64 @@ impl AndroidWindow {
         }
     }
     fn point(&self, p: Point<Pixels>, clamp: bool) -> Option<(f32, f32)> {
-        if (!clamp && !self.bounds.contains(&p))
-            || self.bounds.size.width <= px(0.)
-            || self.bounds.size.height <= px(0.)
-        {
-            return None;
+        self.surface().point(p, clamp)
+    }
+    fn surface(&self) -> Surface {
+        Surface {
+            bounds: self.bounds,
+            width: self.width,
+            height: self.height,
         }
-        let x = (p.x - self.bounds.origin.x) / self.bounds.size.width * self.width as f32;
-        let y = (p.y - self.bounds.origin.y) / self.bounds.size.height * self.height as f32;
-        Some((
-            x.clamp(0., (self.width - 1) as f32),
-            y.clamp(0., (self.height - 1) as f32),
-        ))
+    }
+    fn poll_gestures(&mut self) {
+        let events = self
+            .gestures
+            .as_mut()
+            .map(Gestures::drain)
+            .unwrap_or_default();
+        if !self.input.active() || self.touch_down || self.mouse_buttons != 0 {
+            return;
+        }
+        for event in events {
+            for action in self.touch_gestures.handle(event, self.surface()) {
+                self.send(action);
+            }
+        }
+    }
+    fn configure_gestures(&mut self, bounds: Bounds<Pixels>, window: &Window) {
+        if self.bounds != bounds {
+            for action in self.touch_gestures.cancel() {
+                self.send(action);
+            }
+            if self.touch_down {
+                self.send(Action::Device(InputEvent::CancelTouch));
+                self.touch_down = false;
+                self.touch_second = false;
+            }
+        }
+        self.bounds = bounds;
+        if self.gestures.is_none()
+            && let Ok(handle) = HasWindowHandle::window_handle(window)
+            && let RawWindowHandle::AppKit(handle) = handle.as_raw()
+        {
+            self.gestures = Some(unsafe { Gestures::new(handle.ns_view) });
+        }
+        let enabled = self.input.active()
+            && window.is_window_active()
+            && !self.touch_down
+            && self.mouse_buttons == 0;
+        if let Some(gestures) = &mut self.gestures {
+            gestures.configure(
+                [
+                    f32::from(bounds.origin.x) as f64,
+                    f32::from(bounds.origin.y) as f64,
+                    f32::from(bounds.size.width) as f64,
+                    f32::from(bounds.size.height) as f64,
+                ],
+                enabled,
+                !self.mouse_mode,
+            );
+        }
     }
     fn touch(&mut self, p: (f32, f32), second: bool, initial: bool) {
         let mut points = vec![(0, p.0, p.1)];
@@ -304,11 +368,16 @@ impl AndroidWindow {
                 cx.notify();
                 return;
             }
+            if name == "v" {
+                if let Err(e) = self.files.paste(self.input.lease()) {
+                    self.error = Some(e.to_string());
+                }
+                cx.stop_propagation();
+                window.prevent_default();
+                cx.notify();
+                return;
+            }
             let action = match name.as_str() {
-                "v" => cx
-                    .read_from_clipboard()
-                    .and_then(|c| c.text())
-                    .map(Action::Text),
                 "c" => Some(Action::Edit("copy")),
                 "x" => Some(Action::Edit("cut")),
                 "a" => Some(Action::Edit("select_all")),
@@ -364,6 +433,12 @@ impl AndroidWindow {
             self.input.activate();
         }
         if let Some(p) = self.point(event.position, false) {
+            for action in self.touch_gestures.cancel() {
+                self.send(action);
+            }
+            if let Some(gestures) = &mut self.gestures {
+                gestures.configure([0.; 4], false, false);
+            }
             if event.button == MouseButton::Left && !self.mouse_mode {
                 self.touch_down = true;
                 self.touch(p, event.modifiers.alt, true);
@@ -382,7 +457,13 @@ impl AndroidWindow {
     }
     fn mouse_up(&mut self, event: &MouseUpEvent) {
         if event.button == MouseButton::Left && self.touch_down {
+            // Mouse-up can contain a newer position than the last coalesced move.
+            // Keep the final position ordered before releasing the guest contacts.
+            if let Some(p) = self.point(event.position, true) {
+                self.touch(p, self.touch_second, true);
+            }
             self.touch_down = false;
+            self.touch_second = false;
             self.send(Action::Device(InputEvent::Touch { points: vec![] }));
         } else if self.mouse_buttons != 0 {
             self.mouse_buttons &= !match event.button {
@@ -415,6 +496,10 @@ impl AndroidWindow {
 }
 impl Render for AndroidWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.files.focus(self.input.lease());
+        if let Err(e) = self.files.poll(window) {
+            self.files.error = Some(e.to_string());
+        }
         if self.closed {
             window.remove_window();
         }
@@ -441,7 +526,11 @@ impl Render for AndroidWindow {
             }
         }
         let available = window.viewport_size();
-        let footer = if self.error.is_some() || self.frame_error.is_some() {
+        let footer = if self.error.is_some()
+            || self.frame_error.is_some()
+            || self.files.error.is_some()
+            || self.files.background_error.is_some()
+        {
             52.
         } else {
             28.
@@ -459,6 +548,13 @@ impl Render for AndroidWindow {
         let input_focus = self.focus.clone();
         let raw = self.game_controls;
         let mut root = div()
+            .id("android-app-files")
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                if let Err(e) = this.files.drop_files(paths.paths().to_vec()) {
+                    this.error = Some(e.to_string());
+                }
+                cx.notify();
+            }))
             .size_full()
             .bg(rgb(0x151715))
             .flex()
@@ -487,16 +583,23 @@ impl Render for AndroidWindow {
             root = root
                 .on_mouse_up(
                     button,
-                    cx.listener(|this, event: &MouseUpEvent, _, _| this.mouse_up(event)),
+                    cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                        this.mouse_up(event);
+                        cx.notify();
+                    }),
                 )
                 .on_mouse_up_out(
                     button,
-                    cx.listener(|this, event: &MouseUpEvent, _, _| this.mouse_up(event)),
+                    cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                        this.mouse_up(event);
+                        cx.notify();
+                    }),
                 );
         }
         let mut surface = div()
             .w(dimensions.width)
             .h(dimensions.height)
+            .flex_shrink_0()
             .relative()
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
                 if let Some(p) = this.point(event.position, false) {
@@ -516,7 +619,10 @@ impl Render for AndroidWindow {
         for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
             surface = surface.on_mouse_down(
                 button,
-                cx.listener(|this, e: &MouseDownEvent, w, _| this.mouse_down(e, w)),
+                cx.listener(|this, e: &MouseDownEvent, w, cx| {
+                    this.mouse_down(e, w);
+                    cx.notify();
+                }),
             );
         }
         root.child(
@@ -528,8 +634,9 @@ impl Render for AndroidWindow {
                 )
                 .child(
                     canvas(
-                        move |bounds, _, cx| {
-                            let _ = entity.update(cx, |this, _| this.bounds = bounds);
+                        move |bounds, window, cx| {
+                            let _ = entity
+                                .update(cx, |this, _| this.configure_gestures(bounds, window));
                         },
                         move |bounds, _, window, cx| {
                             // A held drag keeps moving when it leaves the surface or window.
@@ -558,6 +665,7 @@ impl Render for AndroidWindow {
         .child(
             div()
                 .h(px(28.))
+                .flex_shrink_0()
                 .w_full()
                 .px(px(10.))
                 .text_size(px(11.))
@@ -618,21 +726,71 @@ impl Render for AndroidWindow {
                 )
                 .when(self.controller.is_some(), |row| {
                     row.child("Controller connected")
-                }),
+                })
+                .when_some(self.files.busy, |row, label| row.child(label))
+                .child(
+                    div()
+                        .id("mac-downloads")
+                        .cursor_pointer()
+                        .child(if self.files.latest.is_some() {
+                            "Saved to Mac"
+                        } else {
+                            "Downloads"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(path) = this
+                                .files
+                                .latest
+                                .clone()
+                                .or_else(|| glidepod_macos::files::downloads_directory().ok())
+                            {
+                                cx.reveal_path(&path);
+                            }
+                        })),
+                ),
         )
         .children(
             self.error
                 .clone()
+                .or_else(|| self.files.error.clone())
+                .or_else(|| self.files.background_error.clone())
                 .or_else(|| self.frame_error.clone())
                 .map(|e| {
                     div()
                         .h(px(24.))
+                        .flex_shrink_0()
                         .w_full()
                         .px(px(10.))
                         .text_size(px(11.))
                         .text_color(rgb(0xf0bb93))
                         .overflow_hidden()
-                        .child(e)
+                        .flex()
+                        .gap(px(10.))
+                        .child(div().flex_1().min_w_0().overflow_hidden().child(e))
+                        .when(self.files.can_retry(), |row| {
+                            row.child(
+                                div()
+                                    .id("retry-file-selection")
+                                    .cursor_pointer()
+                                    .child("Choose Again")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.files.retry();
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("cancel-file-selection")
+                                    .cursor_pointer()
+                                    .child("Cancel")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if let Err(e) = this.files.cancel_retry() {
+                                            this.files.error = Some(e.to_string());
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                        })
                 }),
         )
     }

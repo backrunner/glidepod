@@ -46,6 +46,8 @@ GlidePod brings Android applications onto the Mac as individual windows, with an
 | [Google services and notifications](implementation/14-google-services-and-notifications.md) | Live GMS prerequisites, isolated optional-install candidate, notification coverage fix and separate sign-in/FCM/native acceptance gates |
 | [Google services product workflow](implementation/15-google-services-product-and-system-notifications.md) | Transactional optional installation, removal/recovery and Android system notification delivery |
 | [Source review](implementation/16-source-review.md) | Review corrections, submission checks and explicit validation boundaries |
+| [Host files, downloads and clipboard](implementation/17-host-files-and-clipboard-plan.md) | Implemented Developer-image file selection, URI delivery, download export and clipboard bridges; guest evidence and native acceptance boundaries |
+| [Touch and trackpad input](implementation/18-touch-and-trackpad-input.md) | Touch coordinate/release accuracy, native scroll/pinch/rotation, game-input limits and real Android gesture recognition |
 | [Icon Composer reconstruction](design/icon-composer/README.md) | Selected B design rebuilt as editable vector layers, clean background, appearance previews and development bundle verification |
 
 ## Open the prototype
