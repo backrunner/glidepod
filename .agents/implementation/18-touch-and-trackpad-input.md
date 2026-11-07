@@ -55,9 +55,29 @@ Native desktop inspection returned `cgWindowNotFound`. Physical trackpad recogni
 
 The complete pending file/clipboard/input batch was reviewed together. The two file-lifecycle fixes and final checks are recorded in [the file integration review](17-host-files-and-clipboard-plan.md#submission-review-2026-11-07). The final workspace suite has 79 passing ordinary tests, with 12 opt-in tests skipped by default. Eight relevant guest tests were executed separately and passed, including all three input tests above against the registered software-rendered guest. The native gesture adapter test also passed again. Android helper compilation, strict Clippy, workspace build, development packaging and signature verification passed. Source submission does not extend the physical-device acceptance boundary stated above.
 
+## Physical trackpad acceptance, 2026-11-08
+
+The user operated the Mac's physical trackpad in the independent `GlidePod Test` window on Mac17,14, macOS 27.2 (26B123). The receiving fixture ran on Android 17 Developer display 3 (720 × 1080), with software rendering. A temporary, app-local diagnostic paired AppKit events and queue delivery with the Android Activity's raw events; it did not inject the manual gestures. The diagnostics were removed after inspection without changing gesture behavior.
+
+Acceptance uses the final paired trace; earlier incomplete snapshots and an older `scale.json` file are excluded.
+
+| Physical operation | Observed result |
+| --- | --- |
+| Tap | The native window's button reached count 3 in the click-only round and count 4 after the completed gesture round. Android recorded matching single-contact down/up sequences. |
+| Two-finger scroll | Four AppKit begin/end sequences produced four Android single-contact swipes, with movement in both vertical directions. |
+| Pinch out/in | Thirteen magnification begin/end sequences produced thirteen Android two-contact sequences. An isolated outward example increased span from 432 to 648 pixels; an inward example decreased it from 432 to about 181 pixels. Android's scale recognizer also wrote a fresh result during this round. |
+| Rotation | Four AppKit rotation begin/end sequences overlapped pinch and reached Android as changes to the same two contacts' angle. The recorded physical rotations were small (guest angle range approximately −0.18° to +0.67° for these overlapping sequences); this establishes forwarding, not large-angle ergonomics. |
+| Release and inertia | All 19 touch sequences ended with ACTION_UP; all 13 two-contact sequences also had paired pointer-down/pointer-up. All 90 captured AppKit momentum events were consumed. Android received zero ACTION_SCROLL wheel events, so the touch swipe was not duplicated as wheel inertia. |
+
+The final round added 258 Android records: 241 touch events and 17 mouse hover events. The host drained 51 scroll events (including two late cancellations), 265 magnification events and 10 rotation events. These event counts need not match: the host coalesces motion and Android generates pointer lifecycle and hover callbacks.
+
+Local-only evidence is in `evidence/native-acceptance-20261107/`: `manual-round3-host-trace.log`, `manual-round3-events.jsonl`, `manual-round3-sessions.json` and `manual-trackpad-acceptance.json`. The fixture records gestures but does not visually scroll/zoom its layout. This session qualifies native event forwarding and touch release on this configuration; commercial-game compatibility, perceived latency, broad hardware/controller/IME coverage, large rotations and resize/focus stress remain separate from it.
+
+Post-capture checks passed: paired-trace assertions for stable pointer IDs, balanced releases and inertia suppression; the native gesture adapter regression; documentation links and diff checks; and a locked workspace build of the accepted `26869b9` source in an isolated checkout. The acceptance update changes documentation only. Concurrent macOS module edits in the main working tree were excluded from this build and submission.
+
 ## References
 
-The later [unlocked desktop session](17-host-files-and-clipboard-plan.md#unlocked-native-acceptance-2026-11-07) verified native file panels and menu clipboard transfer and fixed a cancellation encoding bug. It does not replace the physical trackpad boundary: background-directed automated clicks did not produce new Android fixture events, and no hardware gesture result is claimed from those attempts.
+The [unlocked desktop session](17-host-files-and-clipboard-plan.md#unlocked-native-acceptance-2026-11-07) verified native file panels and menu clipboard transfer and fixed a cancellation encoding bug. Background-directed automated clicks did not establish physical input acceptance; the manual trackpad evidence above is a separate result.
 
 - [Apple: Handling Trackpad Events](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html) — gesture phases, cancellation and separate scroll momentum.
 - [Apple: NSEvent](https://developer.apple.com/documentation/appkit/nsevent) — local event monitors, magnification and rotation.

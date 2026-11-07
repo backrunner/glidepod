@@ -72,6 +72,6 @@ The native Rust/GPUI foundation now exists. The subsequent [Android boot and nat
 
 - [Apps, windows and experimental Metal](implementation/04-apps-windows-and-metal.md) — installation, per-app displays, Unicode input, launcher bundles and live widget hosting.
 
-- [Independent windows and device input](implementation/05-independent-windows-and-input.md) — continuous keyboard/touch/mouse/controller input, focus cleanup and dual-app Software/Metal verification; physical input acceptance remains pending.
+- [Independent windows and device input](implementation/05-independent-windows-and-input.md) — continuous keyboard/touch/mouse/controller input, focus cleanup and dual-app Software/Metal verification; [physical trackpad forwarding](implementation/18-touch-and-trackpad-input.md#physical-trackpad-acceptance-2026-11-08) is verified, while broader hardware input acceptance remains pending.
 
 - [Google services product workflow and Android system notifications](implementation/15-google-services-product-and-system-notifications.md)

@@ -88,7 +88,7 @@ The user unlocked the desktop. The ad-hoc development bundle was exercised on Ma
 
 The menu actions were verified directly. Simulated shortcuts in the native Save field did not consistently act on that field, so physical shortcut and IME behavior is not certified. The automation paste helper restores the previous host clipboard immediately; asynchronous paste can observe that restored value, so temporary tool clipboard contents are not a deterministic manual-paste substitute. Closing an Android task returned to the management window, but subsequent coordinate actions encountered the tool's `noWindowsAvailable` error until the test process was restarted. Background-directed test-window clicks produced no new Android events; this is not evidence of successful physical input or a reason to relax active-window ownership.
 
-The updated native regression check, 79 ordinary workspace tests, strict Clippy, workspace build, development packaging and signature verification passed. Raw fixture assertions are local-only in `evidence/native-acceptance-20261107/`. Physical Finder dragging, trackpad gestures, hardware controllers and broader resize/focus behavior remain separate acceptance items.
+The updated native regression check, 79 ordinary workspace tests, strict Clippy, workspace build, development packaging and signature verification passed. Raw fixture assertions are local-only in `evidence/native-acceptance-20261107/`. Physical Finder dragging, hardware controllers and broader resize/focus behavior remain separate acceptance items. The subsequent [physical trackpad session](18-touch-and-trackpad-input.md#physical-trackpad-acceptance-2026-11-08) verified tap, scroll, pinch in/out and rotation delivery.
 
 ## Product contract
 
