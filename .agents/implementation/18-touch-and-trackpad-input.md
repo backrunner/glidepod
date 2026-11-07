@@ -57,5 +57,7 @@ The complete pending file/clipboard/input batch was reviewed together. The two f
 
 ## References
 
+The later [unlocked desktop session](17-host-files-and-clipboard-plan.md#unlocked-native-acceptance-2026-11-07) verified native file panels and menu clipboard transfer and fixed a cancellation encoding bug. It does not replace the physical trackpad boundary: background-directed automated clicks did not produce new Android fixture events, and no hardware gesture result is claimed from those attempts.
+
 - [Apple: Handling Trackpad Events](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html) — gesture phases, cancellation and separate scroll momentum.
 - [Apple: NSEvent](https://developer.apple.com/documentation/appkit/nsevent) — local event monitors, magnification and rotation.

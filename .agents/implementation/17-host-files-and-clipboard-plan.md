@@ -1,6 +1,6 @@
 # Host files, downloads and clipboard integration
 
-Date: 2026-11-07. Initial audit: `cf1ced8`. Status: implemented Developer-image bridge; native interaction acceptance remains open.
+Date: 2026-11-07. Initial audit: `cf1ced8`. Status: implemented Developer-image bridge; partial unlocked native acceptance recorded below.
 
 ## Implemented behavior
 
@@ -20,7 +20,7 @@ Source adapters: [`host_files.rs`](../../crates/glidepod-ui/src/host_files.rs), 
 
 The original unprivileged file fixture exercises activity results, URI reads and persistence, deferred saves, publication and private Share exports. Rust tests cover collision preservation, interrupted transfers, checksum rejection and promotion rollback. Local raw results are in `evidence/host-files-2026-11-07/`; the validation record there identifies exact passed scenarios.
 
-The macOS development bundle can be built and launched. This session reported `CGSSessionScreenIsLocked=1`, and native window access returned `cgWindowNotFound`; Finder drag and native panel/keyboard interaction are therefore **not** certified by guest tests. Photos-library selection and promised-file drops remain follow-ups; filesystem images use the native file panel. Custom in-app galleries, arbitrary views without Share/paste support, camera capture, directory selection and rootless image integration are not generalized by this implementation. Large-file limits and minimum macOS versions still need scale/platform qualification.
+The macOS development bundle can be built and launched. The initial locked session reported `CGSSessionScreenIsLocked=1` and `cgWindowNotFound`; guest tests did not certify Finder drag or native panel/keyboard interaction. The later unlocked-session results below qualify a subset of native behavior. Photos-library selection and promised-file drops remain follow-ups; filesystem images use the native file panel. Custom in-app galleries, arbitrary views without Share/paste support, camera capture, directory selection and rootless image integration are not generalized by this implementation. Large-file limits and minimum macOS versions still need scale/platform qualification.
 
 ### Validation on 2026-11-07
 
@@ -76,6 +76,19 @@ Final submission checks passed:
 Final review logs and reports are local-only under `evidence/final-review-20261107/`; binaries, VM data and raw traces are excluded from the source submission.
 
 Native physical Finder, panel and trackpad acceptance remains separate from source submission. The existing locked-session limitation is not removed by the automated tests.
+
+## Unlocked native acceptance, 2026-11-07
+
+The user unlocked the desktop. The ad-hoc development bundle was exercised on Mac17,14, macOS 27.2 (26B123), against the disposable Android 17 Developer store with software rendering. Native UI observations and Android fixture assertions were paired; no private user files were selected.
+
+- A real Android `OPEN_DOCUMENT` request presented a window-owned `NSOpenPanel`. Selecting the synthetic `native-选择.txt` returned its original name, a persisted URI grant and the exact SHA-256 of the Mac file.
+- Clicking the native Cancel button initially left Android waiting and displayed “Too many selected files.” The native completion boxed a C comparison as JSON number 0/1, while Rust expected a boolean. Explicit `@YES`/`@NO` now preserve the cancellation contract. The rebuilt app returned Android `RESULT_CANCELED`; the native regression test covers Cancel, Abort and OK through the actual JSON boundary and verifies single consumption.
+- A real `CREATE_DOCUMENT` request presented `NSSavePanel`. The selected Unicode filename was preserved. Android received an unwritten URI before publication; after the fixture wrote and closed it, the exact contents appeared in the selected Mac directory.
+- A Chinese text paste reached the Android editor. ASCII text entry and Select All also reached it. Android Copy followed by native Edit > Select All / Paste placed the exact copied text into the Save panel's filename field. The application now exposes AppKit's standard Cut/Copy/Paste/Select All menu actions, with matching Android-window handlers and the existing focus lease checks.
+
+The menu actions were verified directly. Simulated shortcuts in the native Save field did not consistently act on that field, so physical shortcut and IME behavior is not certified. The automation paste helper restores the previous host clipboard immediately; asynchronous paste can observe that restored value, so temporary tool clipboard contents are not a deterministic manual-paste substitute. Closing an Android task returned to the management window, but subsequent coordinate actions encountered the tool's `noWindowsAvailable` error until the test process was restarted. Background-directed test-window clicks produced no new Android events; this is not evidence of successful physical input or a reason to relax active-window ownership.
+
+The updated native regression check, 79 ordinary workspace tests, strict Clippy, workspace build, development packaging and signature verification passed. Raw fixture assertions are local-only in `evidence/native-acceptance-20261107/`. Physical Finder dragging, trackpad gestures, hardware controllers and broader resize/focus behavior remain separate acceptance items.
 
 ## Product contract
 

@@ -369,12 +369,9 @@ impl AndroidWindow {
                 return;
             }
             if name == "v" {
-                if let Err(e) = self.files.paste(self.input.lease()) {
-                    self.error = Some(e.to_string());
-                }
+                self.paste(cx);
                 cx.stop_propagation();
                 window.prevent_default();
-                cx.notify();
                 return;
             }
             let action = match name.as_str() {
@@ -421,6 +418,14 @@ impl AndroidWindow {
             }));
             cx.stop_propagation();
             window.prevent_default();
+        }
+    }
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        if self.input.active() {
+            if let Err(e) = self.files.paste(self.input.lease()) {
+                self.error = Some(e.to_string());
+            }
+            cx.notify();
         }
     }
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window) {
@@ -562,6 +567,22 @@ impl Render for AndroidWindow {
             .items_center()
             .justify_center()
             .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &gpui_component::input::Cut, _, _| {
+                this.send(Action::Edit("cut"));
+            }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Copy, _, _| {
+                this.send(Action::Edit("copy"));
+            }))
+            .on_action(
+                cx.listener(|this, _: &gpui_component::input::Paste, _, cx| {
+                    this.paste(cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &gpui_component::input::SelectAll, _, _| {
+                    this.send(Action::Edit("select_all"));
+                }),
+            )
             .on_key_down(cx.listener(Self::key_down))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
                 if let Some(code) = this.held_keys.remove(&event.keystroke.key.to_lowercase()) {

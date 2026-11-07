@@ -20,6 +20,17 @@ int main(void) {
         isolated=[NSPasteboard pasteboardWithUniqueName];
         Method method=class_getClassMethod(NSPasteboard.class,@selector(generalPasteboard));
         IMP original=method_setImplementation(method,(IMP)privateBoard);
+        // Exercise the same completion encoding and JSON round trip as the UI.
+        call(@{@"op":@"picker_results"});
+        for(NSNumber *response in @[@(NSModalResponseCancel),@(NSModalResponseAbort),@(NSModalResponseOK)]) {
+            [results addObject:pickerResult(@"panel-fixture",response.integerValue,@[[NSURL fileURLWithPath:@"/tmp/selected.txt"]])];
+            NSDictionary *completion=call(@{@"op":@"picker_result",@"id":@"panel-fixture"});
+            require(CFGetTypeID((__bridge CFTypeRef)completion[@"cancel"])==CFBooleanGetTypeID(),@"Panel cancellation was encoded as a number instead of a JSON boolean");
+            BOOL cancelled=response.integerValue!=NSModalResponseOK;
+            require([completion[@"cancel"] boolValue]==cancelled,@"Panel cancellation value changed");
+            require([completion[@"paths"] count]==(cancelled ? 0 : 1),@"Cancelled panel retained selected paths");
+            require(![call(@{@"op":@"picker_result",@"id":@"panel-fixture"})[@"ready"] boolValue],@"Panel result was consumed twice");
+        }
         NSDictionary *written=call(@{@"op":@"clipboard_write",@"kind":@"text",@"text":@"中文 😀",@"origin":@"fixture",@"sensitive":@YES});
         NSDictionary *read=call(@{@"op":@"clipboard_read"});
         require([read[@"text"] isEqual:@"中文 😀"]&&[read[@"sensitive"] boolValue],@"Text or sensitive marker did not round trip");
@@ -51,7 +62,7 @@ int main(void) {
         require([call(@{@"op":@"clipboard_status"})[@"revision"] isEqual:revision],@"Invalid content destroyed the previous clipboard");
         [[NSFileManager defaultManager] removeItemAtPath:folder error:nil];
         [isolated releaseGlobally];method_setImplementation(method,original);
-        puts("Passed: private native pasteboard text, sensitive marker, stale revision, empty, file URLs, JPEG to PNG, and invalid-content preservation. Native panel interactions are not covered.");
+        puts("Passed: panel completion JSON booleans and single consumption; private native pasteboard text, sensitive marker, stale revision, empty, file URLs, JPEG to PNG, and invalid-content preservation. Native panel interactions are not covered.");
     }
     return 0;
 }

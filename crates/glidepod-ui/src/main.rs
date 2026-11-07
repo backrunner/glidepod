@@ -1021,6 +1021,19 @@ fn main() -> anyhow::Result<()> {
                     MenuItem::action("Refresh", Refresh),
                 ],
             },
+            Menu {
+                name: "Edit".into(),
+                items: vec![
+                    MenuItem::os_action("Cut", gpui_component::input::Cut, OsAction::Cut),
+                    MenuItem::os_action("Copy", gpui_component::input::Copy, OsAction::Copy),
+                    MenuItem::os_action("Paste", gpui_component::input::Paste, OsAction::Paste),
+                    MenuItem::os_action(
+                        "Select All",
+                        gpui_component::input::SelectAll,
+                        OsAction::SelectAll,
+                    ),
+                ],
+            },
         ]);
         open_center(cx).expect("Open GlidePod window");
         cx.spawn(async move |cx| {

@@ -40,6 +40,14 @@ static NSData *pngData(NSData *input) {
 static NSString *const originType = @"dev.glidepod.clipboard-origin";
 static NSDictionary *failure(NSString *message) {return @{ @"error":message ?: @"Mac file operation failed" };}
 
+static NSDictionary *pickerResult(NSString *token, NSModalResponse response, NSArray<NSURL *> *urls) {
+    NSMutableArray *paths=[NSMutableArray new];
+    if(response==NSModalResponseOK)for(NSURL *url in urls)if(url.isFileURL)[paths addObject:url.path];
+    // Boxing a C comparison produces NSNumber(0/1), not a JSON boolean.
+    // Rust deliberately distinguishes cancellation from an empty selection.
+    return @{ @"id":token, @"paths":paths, @"cancel":response==NSModalResponseOK ? @NO : @YES };
+}
+
 static NSDictionary *clipboardRead(void) {
     NSPasteboard *p=NSPasteboard.generalPasteboard;
     NSInteger revision=p.changeCount;
@@ -127,9 +135,8 @@ static NSDictionary *run(NSDictionary *r) {
         GPFilePanelDelegate *delegate=[GPFilePanelDelegate new];delegate.maximum=MAX(1,MIN(64,[r[@"maximum"] integerValue]));panel.delegate=delegate;delegates[token]=delegate;
         panels[token]=panel;
         [panel beginSheetModalForWindow:owner completionHandler:^(NSModalResponse response) {
-            NSMutableArray *paths=[NSMutableArray new];
-            if(response==NSModalResponseOK) {NSArray<NSURL *> *urls=save ? @[panel.URL] : [(NSOpenPanel *)panel URLs];for(NSURL *u in urls)if(u.isFileURL)[paths addObject:u.path];}
-            if(results.count>=64)[results removeObjectAtIndex:0];[results addObject:@{ @"id":token, @"paths":paths, @"cancel":@(response!=NSModalResponseOK) }];[panels removeObjectForKey:token];[delegates removeObjectForKey:token];
+            NSArray<NSURL *> *urls=response==NSModalResponseOK ? (save ? @[panel.URL] : [(NSOpenPanel *)panel URLs]) : @[];
+            if(results.count>=64)[results removeObjectAtIndex:0];[results addObject:pickerResult(token,response,urls)];[panels removeObjectForKey:token];[delegates removeObjectForKey:token];
         }];
         return @{};
     }

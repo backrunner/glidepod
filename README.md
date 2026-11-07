@@ -42,7 +42,7 @@ GlidePod is an open-source Android environment for Apple Silicon Macs, built wit
 
 Real guest checks have exercised app lifecycle, independent displays/input, storage, permissions, GLES 3 and direct Vulkan. Physical keyboard/IME, mouse, trackpad and controller behavior, current native notification interactions, Launchpad indexing and end-to-end presentation latency still need broader on-device validation. See the [implementation records](.agents/README.md) for the scope of each result.
 
-Host file integration is implemented for the pinned Developer image. Drops use supported app Share actions; custom galleries and arbitrary drop targets remain app-dependent. Native Finder/panel interaction still needs unlocked-session acceptance, and Photos-library selection is not yet included. See the [implementation and acceptance record](.agents/implementation/17-host-files-and-clipboard-plan.md).
+Host file integration is implemented for the pinned Developer image. Drops use supported app Share actions; custom galleries and arbitrary drop targets remain app-dependent. Native Open/Save panels, cancellation and menu-based text clipboard transfer have been exercised in an unlocked session. Physical Finder dragging and broader keyboard/trackpad interaction remain unqualified; Photos-library selection is not yet included. See the [implementation and acceptance record](.agents/implementation/17-host-files-and-clipboard-plan.md).
 
 <details>
 <summary><strong>Native management center preview</strong></summary>
