@@ -443,6 +443,9 @@ fn worker(store: &Store) -> Result<()> {
                 sampler.reset();
             }
             glidepod_macos::tray::publish(&glidepod_macos::tray::Snapshot {
+                // Sampling itself runs every five seconds. Allow two missed
+                // samples before expiry instead of flickering at each boundary.
+                valid_for_seconds: 15,
                 state: runtime.label().into(),
                 detail: reason.clone(),
                 cpu: usage

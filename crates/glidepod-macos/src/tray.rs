@@ -1,4 +1,4 @@
-//! Main-thread AppKit status item, with thread-safe publication of monitoring data.
+//! Main-thread SwiftUI status panel, with thread-safe publication of monitoring data.
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{marker::PhantomData, rc::Rc};
@@ -7,6 +7,7 @@ use std::{marker::PhantomData, rc::Rc};
 pub struct AppEntry {
     pub package_id: String,
     pub title: String,
+    pub icon_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -18,6 +19,7 @@ pub struct Snapshot {
     pub allocation: String,
     pub app_count: Option<usize>,
     pub apps: Vec<AppEntry>,
+    pub valid_for_seconds: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,7 +37,7 @@ pub struct Tray {
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
-    fn glidepod_tray_new() -> *mut std::ffi::c_void;
+    fn glidepod_tray_new(icon_data: *const u8, icon_len: usize) -> *mut std::ffi::c_void;
     fn glidepod_tray_free(handle: *mut std::ffi::c_void);
     fn glidepod_tray_drain(handle: *mut std::ffi::c_void) -> *mut std::ffi::c_char;
     fn glidepod_tray_show(handle: *mut std::ffi::c_void);
@@ -45,7 +47,10 @@ unsafe extern "C" {
 impl Tray {
     pub fn new() -> Result<Self> {
         #[cfg(target_os = "macos")]
-        let handle = unsafe { glidepod_tray_new() };
+        let handle = {
+            let icon = include_bytes!("../../../assets/brand/glidepod-icon-light.png");
+            unsafe { glidepod_tray_new(icon.as_ptr(), icon.len()) }
+        };
         #[cfg(not(target_os = "macos"))]
         let handle: *mut std::ffi::c_void = std::ptr::null_mut();
         ensure!(

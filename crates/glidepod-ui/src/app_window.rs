@@ -33,6 +33,7 @@ impl PendingFrame {
 
 pub struct AndroidWindow {
     pub(crate) title: String,
+    pub(crate) icon_path: Option<std::path::PathBuf>,
     pub(crate) epoch: u64,
     dock: glidepod_macos::dock::Session,
     input: WindowInput,
@@ -64,6 +65,7 @@ pub fn open(
     session: AppWindow,
     dock: glidepod_macos::dock::Session,
     title: String,
+    icon_path: Option<std::path::PathBuf>,
     game: bool,
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<AndroidWindow>> {
@@ -78,7 +80,9 @@ pub fn open(
             }),
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| AndroidWindow::new(session, dock, title, game, window, cx)),
+        |window, cx| {
+            cx.new(|cx| AndroidWindow::new(session, dock, title, icon_path, game, window, cx))
+        },
     )
 }
 impl AndroidWindow {
@@ -86,6 +90,7 @@ impl AndroidWindow {
         session: AppWindow,
         dock: glidepod_macos::dock::Session,
         title: String,
+        icon_path: Option<std::path::PathBuf>,
         game: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -248,6 +253,7 @@ impl AndroidWindow {
             title,
             epoch,
             dock,
+            icon_path,
             input,
             files,
             frames,

@@ -178,6 +178,7 @@ enum Work {
 struct OpenedApp {
     window: glidepod_runtime::display::AppWindow,
     dock: glidepod_macos::dock::Session,
+    icon_path: Option<PathBuf>,
 }
 fn with_dock(
     window: glidepod_runtime::display::AppWindow,
@@ -186,7 +187,11 @@ fn with_dock(
     icon: Option<&std::path::Path>,
 ) -> anyhow::Result<OpenedApp> {
     let dock = glidepod_macos::dock::Session::start(package, title, icon)?;
-    Ok(OpenedApp { window, dock })
+    Ok(OpenedApp {
+        window,
+        dock,
+        icon_path: icon.map(std::path::Path::to_path_buf),
+    })
 }
 struct AppSession {
     store: Store,
@@ -493,6 +498,7 @@ impl Center {
                         session.window,
                         session.dock,
                         title,
+                        session.icon_path,
                         self.apps.iter().any(|a| a.package_id == package && a.game),
                         cx,
                     ) {

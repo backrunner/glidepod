@@ -26,6 +26,10 @@ open dist/GlidePod.app
 
 `prepare-android-tools.py` downloads pinned JDK, Android SDK/NDK and optional Vulkan validation-layer artifacts into `.cache/android-tools/`, checks their recorded digests and records provenance. The downloaded tools retain their upstream terms; they are not included in this repository. Digest checks do not authenticate a publisher's signature.
 
+Cargo also compiles the native SwiftUI menu-bar panel with Xcode's Swift compiler and links it into the desktop and background agent. To check its native callbacks and optionally export light/dark fixture views, run `python3 tools/check-tray-native.py --render-dir evidence/tray-preview`.
+
+For interactive native review, `python3 tools/check-tray-native.py --preview` builds an isolated fixture app under `.cache/tray-preview/`. Its Open Tray Preview button presents the real panel; selected action payloads appear in the host window without starting Android. Both modes accept `--icons-dir <existing-guest-icon-cache>` to review actual cached artwork. The fixture app and generated captures are excluded from Git.
+
 `package-dev.py` builds the original Android helpers and Rust workspace, compiles the [layered icon](../../assets/README.md), creates `dist/GlidePod.app`, and verifies its ad-hoc signature. The diagnostic helper receives the Hypervisor entitlement. This is a local development bundle, not a notarized public download. No VM engine, renderer or Android system image is bundled. The management center can be explored before setting up a runtime; launching Android apps requires the [external runtime setup](runtime.md).
 
 The app declares `.apk` support as an alternate file handler. It does not change your existing default application. `⌘O` opens the installer, `⌘F` or `⌘K` focuses search, and `⌘R` refreshes the app catalog and preferences.

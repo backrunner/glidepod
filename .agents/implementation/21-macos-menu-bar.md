@@ -1,8 +1,8 @@
 # macOS menu bar monitoring
 
-The desktop owns a native `NSStatusItem` and `NSMenu`. The menu shows Android's current state, VM process CPU and memory, assigned vCPUs/RAM, and the count and list of Android apps with an open GlidePod window. Selecting an app raises its existing window. **Open GlidePod…** returns to the management center; **Quit GlidePod** uses the same application exit path as the main menu. **GlidePod → VM Status** also opens the status menu. **File → Close Window** and Command-W close the current window.
+The tray uses a native `NSStatusItem` with a SwiftUI panel hosted in `NSPopover`. The panel shows Android's current state, VM process CPU and memory, assigned vCPUs/RAM, and the count and list of Android apps with an open GlidePod window. Selecting an app raises its existing window. **Open GlidePod** returns to the management center; **Quit** uses the same application exit path as the main menu. **GlidePod → VM Status** also opens the panel. **File → Close Window** and Command-W close the current window. The [SwiftUI migration record](29-swiftui-menu-bar.md) describes the current implementation and validation.
 
-Closing the management center or the last Android window no longer exits the desktop. Monitoring continues without any open windows. Explicit Quit terminates the desktop and its tray, following the runtime's existing shutdown policy. This tray does not introduce another VM owner or an additional daemon.
+The desktop owns the tray while its windows are open. The existing lightweight background agent takes over when the desktop exits after closing its last window. Explicit Quit follows the runtime's existing shutdown policy. Both processes use the same SwiftUI tray adapter; the adapter does not introduce another VM owner or an additional daemon.
 
 ## Measurements and failure behavior
 
@@ -11,10 +11,10 @@ Closing the management center or the last Android window no longer exits the des
 - CPU uses the difference between cumulative process user/system time divided by measured elapsed wall time. 100% means one fully occupied host core, so multiple busy cores can exceed 100%. XNU's rusage CPU counters use Mach absolute ticks; the native adapter converts them using `mach_timebase_info` with a 128-bit intermediate. The [Apple XNU task accounting implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c) supplies those counters and the physical footprint.
 - **VM memory** is the process's host memory footprint, including the VMM's overhead; it is not guest `MemAvailable` or an Android app's private heap. **Assigned** separately shows the vCPU/RAM configuration reported by the active runtime.
 - **Open apps** counts valid native app windows for the current running VM epoch, including minimized windows. It excludes Android services/background-only processes and stale windows from an earlier VM session. Apps are sorted by label and selecting one focuses the corresponding package's window.
-- Immutable snapshots cross into Objective-C under a lock. A native timer in common run-loop modes updates values while the menu is tracking. Action rows stay in place during tracking; obsolete app actions become disabled. No snapshot for five seconds changes the menu to **Status unavailable** and removes old numeric readings.
+- Immutable snapshots cross into Swift under a lock. A native timer in common run-loop modes updates values while the panel is open. Action rows stay in place until reopening; obsolete app actions become disabled. Expired snapshots change the panel to **Status unavailable** and clear old numeric readings: five seconds for the desktop, fifteen seconds for the background agent's five-second sampling interval. App actions are checked against the latest snapshot again before enqueueing.
 - Native actions use a bounded queue drained by the desktop's existing timer. The native object is main-thread-only, removes its status item and invalidates its timer on teardown; the worker receives a stop signal when its service is dropped.
 
-## Validation, 2026-11-08
+## Initial Objective-C adapter validation, 2026-11-08
 
 The focused Rust tests cover CPU interval arithmetic, PID/start identity resets, executable mismatch, real host memory sampling, current-epoch window counting, stopped/failed states and resource formatting. A short CPU workload compares converted native CPU totals with independent POSIX `getrusage` totals; this caught and prevents a 125/3 timebase undercount on the Apple Silicon validation host.
 

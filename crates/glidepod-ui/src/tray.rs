@@ -16,6 +16,7 @@ use std::{
 pub(crate) struct OpenApp {
     pub package_id: String,
     pub title: String,
+    pub icon_path: Option<std::path::PathBuf>,
     pub epoch: u64,
 }
 
@@ -65,6 +66,7 @@ impl Service {
                                 allocation: "—".into(),
                                 app_count: None,
                                 apps: Vec::new(),
+                                valid_for_seconds: 5,
                             }
                         }
                     };
@@ -105,6 +107,7 @@ fn snapshot(status: &RuntimeStatus, windows: &[OpenApp], usage: Option<&Usage>) 
         .map(|app| AppEntry {
             package_id: app.package_id.clone(),
             title: app.title.clone(),
+            icon_path: app.icon_path.clone(),
         })
         .collect();
     apps.sort_by(|a, b| {
@@ -141,6 +144,7 @@ fn snapshot(status: &RuntimeStatus, windows: &[OpenApp], usage: Option<&Usage>) 
             .unwrap_or_else(|| "—".into()),
         app_count: Some(apps.len()),
         apps,
+        valid_for_seconds: 5,
     }
 }
 
@@ -153,6 +157,7 @@ pub(crate) fn poll(cx: &mut App) {
             handle.read(cx).ok().map(|window| OpenApp {
                 package_id: package.clone(),
                 title: window.title.clone(),
+                icon_path: window.icon_path.clone(),
                 epoch: window.epoch,
             })
         })
@@ -239,16 +244,19 @@ mod tests {
             OpenApp {
                 package_id: "test.old".into(),
                 title: "Old".into(),
+                icon_path: None,
                 epoch: 1,
             },
             OpenApp {
                 package_id: "test.b".into(),
                 title: "Zebra".into(),
+                icon_path: None,
                 epoch: 2,
             },
             OpenApp {
                 package_id: "test.a".into(),
                 title: "Clock".into(),
+                icon_path: Some("/tmp/clock.png".into()),
                 epoch: 2,
             },
         ];
@@ -260,6 +268,10 @@ mod tests {
         let live = snapshot(&status, &windows, Some(&usage));
         assert_eq!(live.app_count, Some(2));
         assert_eq!(live.apps[0].title, "Clock");
+        assert_eq!(
+            live.apps[0].icon_path.as_deref(),
+            Some(std::path::Path::new("/tmp/clock.png"))
+        );
         assert_eq!(live.cpu, "125.5%");
         assert_eq!(live.memory, "1.50 GiB");
         assert_eq!(snapshot(&status, &windows, None).cpu, "—");

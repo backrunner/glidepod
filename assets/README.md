@@ -13,3 +13,5 @@ Run `rtk proxy python3 tools/export-icons.py` to render the six macOS appearance
 References: [Icon Composer](https://developer.apple.com/icon-composer/), [creating an app icon](https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer), [Apple app icon guidance](https://developer.apple.com/design/human-interface-guidelines/app-icons).
 
 Original artwork is licensed under Apache-2.0 with the project.
+
+The SwiftUI tray uses the same compiled app icon for its panel header and 20-point, full-color menu-bar item. The embedded background agent reads the enclosing desktop bundle's catalog/ICNS, while direct Cargo launches fall back to the existing `glidepod-icon-light.png` export. Keep this shared artwork instead of introducing an unrelated SF Symbol or template silhouette.
