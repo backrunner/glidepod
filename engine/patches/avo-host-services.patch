@@ -1,0 +1,286 @@
+diff --git a/engine/hvf/vmm/build.rs b/engine/hvf/vmm/build.rs
+index 48ce634..0a3f289 100644
+--- a/engine/hvf/vmm/build.rs
++++ b/engine/hvf/vmm/build.rs
+@@ -10,6 +10,14 @@ use std::path::PathBuf;
+ use std::process::Command;
+ 
+ fn main() {
++    println!("cargo:rerun-if-changed=src/vmnet.m");
++    let native = PathBuf::from(std::env::var("OUT_DIR").unwrap());
++    assert!(Command::new("/usr/bin/clang").args(["-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror", "-mmacosx-version-min=15.0", "-c", "src/vmnet.m", "-o"]).arg(native.join("vmnet.o")).status().unwrap().success());
++    assert!(Command::new("/usr/bin/ar").arg("rcs").arg(native.join("libglidepod_vmnet.a")).arg(native.join("vmnet.o")).status().unwrap().success());
++    println!("cargo:rustc-link-search=native={}", native.display());
++    println!("cargo:rustc-link-lib=static=glidepod_vmnet");
++    println!("cargo:rustc-link-lib=framework=Foundation");
++    println!("cargo:rustc-link-lib=framework=vmnet");
+     let source = "layer/native_astc.c";
+     println!("cargo:rerun-if-changed={source}");
+     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR")).join("libVkLayer_avo_native_astc.dylib");
+diff --git a/engine/hvf/vmm/src/bridge.rs b/engine/hvf/vmm/src/bridge.rs
+new file mode 100644
+index 0000000..a97728f
+--- /dev/null
++++ b/engine/hvf/vmm/src/bridge.rs
+@@ -0,0 +1,61 @@
++//! Bounded Ethernet bridge. A requested bridge never falls back to user-mode NAT.
++use crate::virtio::net::{Downlink, Uplink};
++use std::{collections::VecDeque, ffi::{CString, c_void}, sync::{Arc, Mutex}, thread};
++const MAX_FRAME: usize = 16384;
++const MAX_QUEUED: usize = 128;
++unsafe extern "C" {
++    fn gp_vmnet_open(interface: *const i8, mac: *mut u8, error: *mut i32) -> *mut c_void;
++    fn gp_vmnet_read(handle: *mut c_void, bytes: *mut u8, capacity: usize) -> i32;
++    fn gp_vmnet_write(handle: *mut c_void, bytes: *const u8, size: usize) -> i32;
++    fn gp_vmnet_wait(handle: *mut c_void);
++    fn gp_vmnet_wake(handle: *mut c_void);
++    fn gp_vmnet_close(handle: *mut c_void);
++}
++struct Shared { handle: *mut c_void, queue: Mutex<VecDeque<Vec<u8>>> }
++// Packet reads/writes are exclusive to the worker; wake is a thread-safe semaphore.
++unsafe impl Send for Shared {}
++unsafe impl Sync for Shared {}
++impl Drop for Shared { fn drop(&mut self) { unsafe { gp_vmnet_close(self.handle); } } }
++pub struct Bridge { shared: Arc<Shared>, pub mac: [u8; 6] }
++impl Bridge {
++    pub fn open(interface: &str) -> Result<Self, String> {
++        if interface.is_empty() || interface.len() > 15 || !interface.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
++            return Err("Invalid bridge interface".into());
++        }
++        let name = CString::new(interface).unwrap();
++        let mut mac = [0; 6]; let mut error = 0;
++        let handle = unsafe { gp_vmnet_open(name.as_ptr(), mac.as_mut_ptr(), &mut error) };
++        if handle.is_null() { return Err(format!("Bridged networking could not start on {interface} (vmnet {error}). The engine needs macOS vmnet authorization and an available bridge interface. Shared networking was not substituted.")); }
++        Ok(Self { shared: Arc::new(Shared { handle, queue: Mutex::new(VecDeque::new()) }), mac })
++    }
++    pub fn connect(self, downlink: Downlink) -> Result<Uplink, String> {
++        let weak = Arc::downgrade(&self.shared);
++        thread::Builder::new().name("bridge-network".into()).spawn(move || {
++            let mut buffer = vec![0u8; MAX_FRAME];
++            while let Some(state) = weak.upgrade() {
++                unsafe { gp_vmnet_wait(state.handle); }
++                let outgoing: Vec<_> = state.queue.lock().unwrap().drain(..).collect();
++                for frame in outgoing { unsafe { gp_vmnet_write(state.handle, frame.as_ptr(), frame.len()); } }
++                for _ in 0..64 {
++                    let size = unsafe { gp_vmnet_read(state.handle, buffer.as_mut_ptr(), buffer.len()) };
++                    if size < 0 {
++                        // Losing a bridge must not leave Android reporting a healthy NAT link.
++                        eprintln!("Bridged network interface disconnected");
++                        std::process::exit(1);
++                    }
++                    if size == 0 { break; }
++                    if size as usize <= buffer.len() { downlink.deliver([buffer[..size as usize].to_vec()]); }
++                }
++            }
++        }).map_err(|e| e.to_string())?;
++        let shared = self.shared;
++        Ok(Box::new(move |frames| {
++            let mut queue = shared.queue.lock().unwrap();
++            for frame in frames {
++                if frame.len() >= 14 && frame.len() <= MAX_FRAME && queue.len() < MAX_QUEUED { queue.push_back(frame); }
++            }
++            drop(queue);
++            unsafe { gp_vmnet_wake(shared.handle); }
++        }))
++    }
++}
+diff --git a/engine/hvf/vmm/src/cuttlefish.rs b/engine/hvf/vmm/src/cuttlefish.rs
+index eaf46f8..794d12e 100644
+--- a/engine/hvf/vmm/src/cuttlefish.rs
++++ b/engine/hvf/vmm/src/cuttlefish.rs
+@@ -34,6 +34,7 @@ use std::time::Duration;
+ 
+ pub struct Options {
+     pub images: PathBuf,
++    pub bridge_interface: Option<String>,
+     /// This Mac's side of a VM: shared-memory frames, logs, bootconfig.txt.
+     pub instance: PathBuf,
+     /// The writable disks that belong with Android's data (super, vbmeta,
+@@ -622,10 +623,14 @@ fn boot(options: &Options, renderer: Option<&RenderHost>, bluetooth: Option<&Arc
+     // table): the radio HAL brings buried_eth0 up with a data call's address
+     // (modem.rs) once the modem has a SIM, and leaves it down until then.
+     // Ethernet has no carrier, so Android shows a phone on Wi-Fi.
++    let mut bridge = options.bridge_interface.as_deref().map(crate::bridge::Bridge::open).transpose()?;
+     let mut nics: Vec<Box<dyn VirtioDevice>> = Vec::new();
+     for index in 0..3u8 {
+-        let mut nic = Net::new([0x02, 0x61, 0x76, 0x6f, 0x00, index]);
+-        if index == 0 || index == 2 {
++        let mac = if index == 1 { bridge.as_ref().map(|b| b.mac).unwrap_or([0x02, 0x61, 0x76, 0x6f, 0x00, index]) } else { [0x02, 0x61, 0x76, 0x6f, 0x00, index] };
++        let mut nic = Net::new(mac);
++        if index == 1 && bridge.is_some() {
++            nic.connect(bridge.take().unwrap().connect(nic.downlink())?);
++        } else if options.bridge_interface.is_none() && (index == 0 || index == 2) {
+             let network = Network::start(nic.downlink())?;
+             nic.connect(network.uplink());
+         }
+diff --git a/engine/hvf/vmm/src/gnss.rs b/engine/hvf/vmm/src/gnss.rs
+index d7a2601..7e80394 100644
+--- a/engine/hvf/vmm/src/gnss.rs
++++ b/engine/hvf/vmm/src/gnss.rs
+@@ -56,7 +56,9 @@ impl Fix {
+             speed: number(4, 0.0)?,
+             bearing: number(5, 0.0)?,
+         };
+-        if !(-90.0..=90.0).contains(&fix.latitude) || !(-180.0..=180.0).contains(&fix.longitude) {
++        if !(-90.0..=90.0).contains(&fix.latitude) || !(-180.0..=180.0).contains(&fix.longitude)
++            || !(-12000.0..=100000.0).contains(&fix.altitude) || !(1.0..=100000.0).contains(&fix.accuracy)
++            || !(0.0..=10000.0).contains(&fix.speed) || !(0.0..360.0).contains(&fix.bearing) {
+             return Err("location needs <latitude> <longitude>".into());
+         }
+         Ok(fix)
+@@ -115,6 +117,7 @@ impl Gnss {
+ 
+     fn answer(&self) {
+         let Some((fix, at)) = *self.fix.lock().unwrap() else { return };
++        if at.elapsed() > Duration::from_secs(15) { return; }
+         let fix = fix.carried_on(at.elapsed());
+         if let Some(input) = self.input.lock().unwrap().as_ref() {
+             input.send(fix.record().as_bytes());
+diff --git a/engine/hvf/vmm/src/main.rs b/engine/hvf/vmm/src/main.rs
+index c8d476c..771c570 100644
+--- a/engine/hvf/vmm/src/main.rs
++++ b/engine/hvf/vmm/src/main.rs
+@@ -77,6 +77,7 @@ mod disk;
+ mod fdt;
+ mod frames;
+ mod gnss;
++mod bridge;
+ mod link;
+ mod machine;
+ mod memory;
+@@ -118,6 +119,7 @@ fn gpu_mode(gpu: Option<&str>, dir: Option<PathBuf>, hwc: Option<&str>) -> Resul
+ }
+ 
+ fn parse(args: &[String]) -> Result<Options, String> {
++    let mut bridge_interface = None;
+     let mut images = None;
+     let mut instance = None;
+     let mut runtime = None;
+@@ -144,6 +146,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
+     while i < args.len() {
+         let value = |i: usize| args.get(i + 1).cloned().ok_or(format!("{} needs a value", args[i]));
+         match args[i].as_str() {
++            "--bridge-interface" => bridge_interface = Some(value(i)?),
+             "--instance" => instance = Some(PathBuf::from(value(i)?)),
+             "--runtime" => runtime = Some(PathBuf::from(value(i)?)),
+             "--userdata" => userdata = Some(PathBuf::from(value(i)?)),
+@@ -213,7 +216,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
+     std::fs::create_dir_all(&runtime).map_err(|e| format!("{}: {e}", runtime.display()))?;
+     Ok(Options {
+         images, instance, disks, runtime, userdata, cpus, memory_mib, display, density, timeout, verbose, properties, gpu, shared_dir,
+-        bluetooth, init_boot, cellular, cameras, cpu, microphone, exit_on_reboot, refresh_rate,
++        bluetooth, init_boot, cellular, cameras, cpu, microphone, exit_on_reboot, refresh_rate, bridge_interface,
+     })
+ }
+ 
+@@ -225,6 +228,8 @@ fn main() -> ExitCode {
+     unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INITIATED, 0) };
+     let args: Vec<String> = std::env::args().skip(1).collect();
+     let result = match args.first().map(String::as_str) {
++        Some("glidepod-capabilities") => { println!("{{\"version\":1,\"location\":true,\"bridged_network\":true}}"); Ok(()) },
++        Some("bridge-probe") if args.len() == 2 => bridge::Bridge::open(&args[1]).map(|_| println!("bridge authorized")),
+         Some("cuttlefish") => parse(&args[1..]).and_then(cuttlefish::run),
+         Some("vbmeta") if args.len() > 1 => android::vbmeta_chain(Path::new(&args[1])).map(|chain| println!("chained: {chain:?}")),
+         _ => Err(USAGE.into()),
+diff --git a/engine/hvf/vmm/src/vmnet.m b/engine/hvf/vmm/src/vmnet.m
+new file mode 100644
+index 0000000..0cc94cc
+--- /dev/null
++++ b/engine/hvf/vmm/src/vmnet.m
+@@ -0,0 +1,96 @@
++// Original GlidePod vmnet adapter. All packet I/O is owned by one Rust worker.
++#import <Foundation/Foundation.h>
++#import <vmnet/vmnet.h>
++#include <sys/uio.h>
++
++@interface GPVMNet : NSObject
++@property(nonatomic) interface_ref interface;
++@property(nonatomic, strong) dispatch_queue_t queue;
++@property(nonatomic, strong) dispatch_semaphore_t event;
++@property(nonatomic) size_t packetSize;
++@end
++@implementation GPVMNet
++@end
++
++void *gp_vmnet_open(const char *bridge, unsigned char *mac, int *error) {
++    @autoreleasepool {
++        GPVMNet *owner = [GPVMNet new];
++        owner.queue = dispatch_queue_create("dev.glidepod.vmnet", DISPATCH_QUEUE_SERIAL);
++        owner.event = dispatch_semaphore_create(0);
++        dispatch_semaphore_t ready = dispatch_semaphore_create(0);
++        xpc_object_t desc = xpc_dictionary_create(NULL, NULL, 0);
++        xpc_dictionary_set_uint64(desc, vmnet_operation_mode_key, VMNET_BRIDGED_MODE);
++        xpc_dictionary_set_string(desc, vmnet_shared_interface_name_key, bridge);
++        __block vmnet_return_t result = VMNET_FAILURE;
++        __block struct { unsigned int values[6]; } address = {{0}};
++        owner.interface = vmnet_start_interface(desc, owner.queue, ^(vmnet_return_t status, xpc_object_t params) {
++            result = status;
++            if (status == VMNET_SUCCESS) {
++                const char *value = xpc_dictionary_get_string(params, vmnet_mac_address_key);
++                owner.packetSize = xpc_dictionary_get_uint64(params, vmnet_max_packet_size_key);
++                if (!value || sscanf(value, "%x:%x:%x:%x:%x:%x", &address.values[0], &address.values[1], &address.values[2], &address.values[3], &address.values[4], &address.values[5]) != 6
++                    || owner.packetSize < 1514 || owner.packetSize > 16384) result = VMNET_INVALID_ARGUMENT;
++            }
++            dispatch_semaphore_signal(ready);
++        });
++        if (!owner.interface || dispatch_semaphore_wait(ready, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)) != 0) {
++            *error = VMNET_FAILURE;
++            // The failed engine exits. Any outstanding callback retains its owner safely.
++            return NULL;
++        }
++        if (result != VMNET_SUCCESS) {
++            *error = result;
++            vmnet_stop_interface(owner.interface, owner.queue, ^(vmnet_return_t status) { (void)status; });
++            return NULL;
++        }
++        for (int i = 0; i < 6; i++) mac[i] = (unsigned char)address.values[i];
++        dispatch_semaphore_t event = owner.event;
++        result = vmnet_interface_set_event_callback(owner.interface, VMNET_INTERFACE_PACKETS_AVAILABLE, owner.queue,
++            ^(interface_event_t mask, xpc_object_t info) { (void)mask; (void)info; dispatch_semaphore_signal(event); });
++        if (result != VMNET_SUCCESS) {
++            *error = result;
++            vmnet_stop_interface(owner.interface, owner.queue, ^(vmnet_return_t status) { (void)status; });
++            return NULL;
++        }
++        *error = 0;
++        return (__bridge_retained void *)owner;
++    }
++}
++void gp_vmnet_wake(void *handle) {
++    GPVMNet *owner = (__bridge GPVMNet *)handle;
++    dispatch_semaphore_signal(owner.event);
++}
++void gp_vmnet_wait(void *handle) {
++    GPVMNet *owner = (__bridge GPVMNet *)handle;
++    dispatch_semaphore_wait(owner.event, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC));
++}
++int gp_vmnet_read(void *handle, unsigned char *bytes, size_t capacity) {
++    GPVMNet *owner = (__bridge GPVMNet *)handle;
++    if (capacity < owner.packetSize) return -1;
++    struct iovec iov = { bytes, capacity };
++    struct vmpktdesc packet = { .vm_pkt_size = capacity, .vm_pkt_iov = &iov, .vm_pkt_iovcnt = 1, .vm_flags = 0 };
++    int count = 1;
++    vmnet_return_t status = vmnet_read(owner.interface, &packet, &count);
++    if (status != VMNET_SUCCESS) return -1;
++    return count ? (int)packet.vm_pkt_size : 0;
++}
++int gp_vmnet_write(void *handle, const unsigned char *bytes, size_t size) {
++    GPVMNet *owner = (__bridge GPVMNet *)handle;
++    if (size > owner.packetSize) return -1;
++    struct iovec iov = { (void *)bytes, size };
++    struct vmpktdesc packet = { .vm_pkt_size = size, .vm_pkt_iov = &iov, .vm_pkt_iovcnt = 1, .vm_flags = 0 };
++    int count = 1;
++    return vmnet_write(owner.interface, &packet, &count) == VMNET_SUCCESS && count == 1 ? 0 : -1;
++}
++void gp_vmnet_close(void *handle) {
++    @autoreleasepool {
++        GPVMNet *owner = (__bridge_transfer GPVMNet *)handle;
++        vmnet_interface_set_event_callback(owner.interface, VMNET_INTERFACE_PACKETS_AVAILABLE, NULL, NULL);
++        dispatch_semaphore_t stopped = dispatch_semaphore_create(0);
++        vmnet_stop_interface(owner.interface, owner.queue, ^(vmnet_return_t result) {
++            (void)result; dispatch_semaphore_signal(stopped);
++        });
++        dispatch_semaphore_wait(stopped, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
++        dispatch_sync(owner.queue, ^{});
++    }
++}

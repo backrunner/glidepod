@@ -6,13 +6,14 @@ mod host_files;
 mod management_ui;
 mod notification_bridge;
 mod touch_gestures;
+mod tray;
 mod views;
 mod window_input;
 use controls::Button;
 use glidepod_core::{ProfileId, Renderer, VmState};
 use glidepod_installer::ApkReport;
 use glidepod_macos::{HostReport, ProbeReport};
-use glidepod_runtime::experimental::{ExperimentalRuntime, RuntimeOwner, RuntimeStatus};
+use glidepod_runtime::experimental::{ExperimentalRuntime, RuntimeStatus};
 use glidepod_runtime::{Configuration, Store};
 use gpui::{prelude::*, *};
 use gpui_component::{
@@ -27,7 +28,16 @@ use std::{
 
 actions!(
     glidepod,
-    [Quit, ChooseApk, FocusSearch, ClearSearch, Refresh]
+    [
+        Quit,
+        CloseWindow,
+        ShowVmStatus,
+        ShowSettings,
+        ChooseApk,
+        FocusSearch,
+        ClearSearch,
+        Refresh
+    ]
 );
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -147,9 +157,11 @@ enum Work {
     Probe(Result<ProbeReport, String>),
     Image(Result<String, String>),
     Runtime(u64, Result<RuntimeStatus, String>),
-    Started(Result<RuntimeOwner, String>),
+    GpuCatalog(Result<glidepod_runtime::gpu::GpuRegistry, String>),
+    Started(Result<(), String>),
     Stopped(Result<RuntimeStatus, String>),
-    Catalog(Result<Vec<glidepod_runtime::guest::AndroidApp>, String>),
+    Catalog(Result<glidepod_runtime::guest::DesktopCatalog, String>),
+    MacEntries(Result<glidepod_macos::launchers::SyncReport, String>),
     Details(
         String,
         u64,
@@ -161,16 +173,25 @@ enum Work {
     ),
     Benchmark(Result<Box<glidepod_runtime::benchmark::BenchmarkReport>, String>),
     Installed(Result<String, String>),
-    Opened(
-        String,
-        String,
-        Result<glidepod_runtime::display::AppWindow, String>,
-    ),
+    Opened(String, String, Result<OpenedApp, String>),
+}
+struct OpenedApp {
+    window: glidepod_runtime::display::AppWindow,
+    dock: glidepod_macos::dock::Session,
+}
+fn with_dock(
+    window: glidepod_runtime::display::AppWindow,
+    package: &str,
+    title: &str,
+    icon: Option<&std::path::Path>,
+) -> anyhow::Result<OpenedApp> {
+    let dock = glidepod_macos::dock::Session::start(package, title, icon)?;
+    Ok(OpenedApp { window, dock })
 }
 struct AppSession {
     store: Store,
+    tray: tray::Service,
     incoming: Arc<Mutex<Vec<PathBuf>>>,
-    owner: Option<RuntimeOwner>,
     center: Option<WindowHandle<Root>>,
     windows: std::collections::HashMap<String, WindowHandle<app_window::AndroidWindow>>,
     notifications: notification_bridge::NotificationBridge,
@@ -182,6 +203,7 @@ struct Center {
     config: Configuration,
     host: HostReport,
     runtime: RuntimeStatus,
+    gpus: glidepod_runtime::gpu::GpuRegistry,
     runtime_polling: bool,
     runtime_revision: u64,
     last_runtime_poll: std::time::Instant,
@@ -210,7 +232,13 @@ struct Center {
     incoming: Arc<Mutex<Vec<PathBuf>>>,
     google_revision: u64,
     google_installed: bool,
+    google_enabled: bool,
     google_recovery: bool,
+    location_latitude: Entity<InputState>,
+    location_longitude: Entity<InputState>,
+    location_message: String,
+    network_message: String,
+    bridge_interfaces: Vec<String>,
     _subscriptions: Vec<Subscription>,
 }
 impl Center {
@@ -223,6 +251,30 @@ impl Center {
     ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus);
+        let location_latitude = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Latitude · −90 to 90")
+                .default_value(
+                    config
+                        .location
+                        .point
+                        .as_ref()
+                        .map(|p| p.latitude.to_string())
+                        .unwrap_or_default(),
+                )
+        });
+        let location_longitude = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Longitude · −180 to 180")
+                .default_value(
+                    config
+                        .location
+                        .point
+                        .as_ref()
+                        .map(|p| p.longitude.to_string())
+                        .unwrap_or_default(),
+                )
+        });
         let search = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Search apps")
@@ -247,6 +299,17 @@ impl Center {
             }
         });
         let (sender, receiver) = mpsc::channel();
+        let runtime = store.runtime_status().expect("Read runtime status");
+        if !runtime.active() {
+            let cached_store = store.clone();
+            let cached_sender = sender.clone();
+            std::thread::spawn(move || {
+                let result = cached_store
+                    .cached_apps()
+                    .and_then(|apps| cached_store.sync_mac_apps(&apps, false));
+                let _ = cached_sender.send(Work::MacEntries(result.map_err(|e| format!("{e:#}"))));
+            });
+        }
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -258,10 +321,20 @@ impl Center {
             }
         })
         .detach();
-        let runtime = store.runtime_status().expect("Read runtime status");
         Self {
+            gpus: store.gpu_registry().unwrap_or_default(),
+            location_latitude,
+            location_longitude,
+            location_message: "Location settings apply while Android is running.".into(),
+            network_message: String::new(),
+            bridge_interfaces: glidepod_macos::network::bridge_interfaces().unwrap_or_default(),
             google_revision: 0,
             google_installed: store.google_apps_installation().ok().flatten().is_some(),
+            google_enabled: store
+                .google_apps_installation()
+                .ok()
+                .flatten()
+                .is_some_and(|i| i.enabled),
             google_recovery: store.google_apps_recovery_pending(),
             apps: store.cached_apps().unwrap_or_default(),
             selected_app: None,
@@ -300,10 +373,17 @@ impl Center {
     }
     fn poll(&mut self, cx: &mut Context<Self>) {
         while let Ok(work) = self.receiver.try_recv() {
-            if !matches!(&work, Work::Runtime(..) | Work::Catalog(..)) {
+            if !matches!(
+                &work,
+                Work::Runtime(..) | Work::GpuCatalog(..) | Work::Catalog(..) | Work::MacEntries(..)
+            ) {
                 self.working = false;
             }
             match work {
+                Work::GpuCatalog(result) => match result {
+                    Ok(gpus) => self.gpus = gpus,
+                    Err(error) => self.notice = Some(error),
+                },
                 Work::Details(package, epoch, result) => {
                     if self.selected_app.as_deref() == Some(&package)
                         && matches!(self.runtime.vm,VmState::Running{epoch:e} if e==epoch)
@@ -344,6 +424,31 @@ impl Center {
                     }
                     match result {
                         Ok(status) => {
+                            self.network_message = if let VmState::Running { epoch } = status.vm {
+                                self.store
+                                    .network_startup_status(epoch)
+                                    .map(|s| s.message)
+                                    .unwrap_or_default()
+                            } else {
+                                String::new()
+                            };
+                            self.location_message = std::fs::read(
+                                self.store.root().join("location-status.json"),
+                            )
+                            .ok()
+                            .filter(|b| b.len() < 8192)
+                            .and_then(|b| {
+                                serde_json::from_slice::<glidepod_runtime::location::Status>(&b)
+                                    .ok()
+                            })
+                            .filter(|s| {
+                                matches!(status.vm, VmState::Running { epoch } if epoch == s.epoch)
+                                    && s.source == self.config.location.source
+                            })
+                            .map(|s| s.message)
+                            .unwrap_or_else(|| {
+                                "Location settings apply while Android is running.".into()
+                            });
                             if let VmState::Running { epoch } = status.vm
                                 && self.catalog_epoch != Some(epoch)
                             {
@@ -353,15 +458,11 @@ impl Center {
                                 self.load_apps(cx);
                             }
                             self.runtime = status;
-                            if !self.runtime.active() {
-                                cx.global_mut::<AppSession>().owner.take();
-                            }
                         }
                         Err(e) => self.notice = Some(e),
                     }
                 }
-                Work::Started(Ok(owner)) => {
-                    cx.global_mut::<AppSession>().owner = Some(owner);
+                Work::Started(Ok(())) => {
                     self.notice = None;
                 }
                 Work::Started(Err(e)) => self.notice = Some(e),
@@ -370,8 +471,16 @@ impl Center {
                     self.notice = None;
                 }
                 Work::Stopped(Err(e)) => self.notice = Some(e),
-                Work::Catalog(Ok(apps)) => {
-                    self.apps = apps;
+                Work::Catalog(Ok(catalog)) => {
+                    self.apps = catalog.apps;
+                    if let Some(warning) = catalog.launchers.warning() {
+                        self.notice = Some(warning);
+                    }
+                }
+                Work::MacEntries(result) => {
+                    if let Some(warning) = result.map(|r| r.warning()).unwrap_or_else(Some) {
+                        self.notice = Some(warning);
+                    }
                 }
                 Work::Catalog(Err(e)) => {
                     self.notice = Some(e);
@@ -385,7 +494,8 @@ impl Center {
                 Work::Installed(Err(e)) => self.notice = Some(e),
                 Work::Opened(package, title, Ok(session)) => {
                     match app_window::open(
-                        session,
+                        session.window,
+                        session.dock,
                         title,
                         self.apps.iter().any(|a| a.package_id == package && a.game),
                         cx,
@@ -409,6 +519,9 @@ impl Center {
                 }
                 Work::Image(Ok(r)) => {
                     self.notice = Some(r);
+                    if let Ok(gpus) = self.store.gpu_registry() {
+                        self.gpus = gpus;
+                    }
                     if let Ok(c) = self.store.load() {
                         self.config = c;
                     }
@@ -427,13 +540,11 @@ impl Center {
                 self.working = state.busy;
                 self.notice = Some(state.message.clone());
                 if !state.busy {
-                    self.google_installed = self
-                        .store
-                        .google_apps_installation()
-                        .ok()
-                        .flatten()
-                        .is_some();
+                    let installation = self.store.google_apps_installation().ok().flatten();
+                    self.google_installed = installation.is_some();
+                    self.google_enabled = installation.is_some_and(|i| i.enabled);
                     self.google_recovery = self.store.google_apps_recovery_pending();
+                    self.apps = self.store.cached_apps().unwrap_or_default();
                     self.catalog_epoch = None;
                 }
                 cx.notify();
@@ -464,6 +575,9 @@ impl Center {
                 let _ = sender.send(Work::Runtime(
                     revision,
                     store.runtime_status().map_err(|e| format!("{e:#}")),
+                ));
+                let _ = sender.send(Work::GpuCatalog(
+                    store.gpu_registry().map_err(|e| format!("{e:#}")),
                 ));
             });
         }
@@ -510,7 +624,7 @@ impl Center {
         let store = self.store.clone();
         let sender = self.sender.clone();
         std::thread::spawn(move || {
-            let result = store.guest().and_then(|g| g.catalog());
+            let result = store.guest().and_then(|g| g.desktop_catalog());
             let _ = sender.send(Work::Catalog(result.map_err(|e| format!("{e:#}"))));
         });
         cx.notify();
@@ -518,13 +632,22 @@ impl Center {
     fn add_launcher(&mut self, app: glidepod_runtime::guest::AndroidApp, cx: &mut Context<Self>) {
         self.working = true;
         let sender = self.sender.clone();
+        let store = self.store.clone();
         std::thread::spawn(move || {
-            let result = glidepod_macos::launchers::create(
+            let result = glidepod_macos::launchers::create_for_store(
                 &app.package_id,
                 &app.label,
                 app.icon_path.as_deref(),
+                store.root(),
             )
-            .map(|p| format!("Added to {}", p.display()));
+            .and_then(|p| {
+                let status = std::process::Command::new("/usr/bin/open")
+                    .arg("-R")
+                    .arg(&p)
+                    .status()?;
+                anyhow::ensure!(status.success(), "Cannot show the app entry in Finder");
+                Ok(format!("Shown in Finder: {}", p.display()))
+            });
             let _ = sender.send(Work::Image(result.map_err(|e| format!("{e:#}"))));
         });
         cx.notify();
@@ -592,9 +715,15 @@ impl Center {
                     .map(|_| "Android notification opened.".into());
                 let _ = sender.send(Work::Image(result.map_err(|e| format!("{e:#}"))));
             } else {
-                let result = store
-                    .guest()
-                    .and_then(|g| g.open_notification(&n, 720, 1080));
+                let result = store.guest().and_then(|g| {
+                    let window = g.open_notification(&n, 720, 1080)?;
+                    let icon = g
+                        .catalog()
+                        .ok()
+                        .and_then(|apps| apps.into_iter().find(|a| a.package_id == n.package_id))
+                        .and_then(|a| a.icon_path);
+                    with_dock(window, &n.package_id, &n.app_label, icon.as_deref())
+                });
                 // Reuse the notifier's window on later clicks, even when a system
                 // notification opened a different package such as Android Settings.
                 // AppWindow still owns cleanup for the actual target task.
@@ -637,7 +766,16 @@ impl Center {
         let store = self.store.clone();
         let sender = self.sender.clone();
         std::thread::spawn(move || {
-            let result = store.guest().and_then(|g| g.open_app(&package, 720, 1080));
+            let mut title = title;
+            let result = store.guest().and_then(|g| {
+                let window = g.open_app(&package, 720, 1080)?;
+                let app = g.catalog()?.into_iter().find(|a| a.package_id == package);
+                if let Some(app) = &app {
+                    title.clone_from(&app.label);
+                }
+                let icon = app.as_ref().and_then(|a| a.icon_path.as_deref());
+                with_dock(window, &package, &title, icon)
+            });
             let _ = sender.send(Work::Opened(
                 package,
                 title,
@@ -686,9 +824,7 @@ impl Center {
         let store = self.store.clone();
         let sender = self.sender.clone();
         std::thread::spawn(move || {
-            let result = std::env::current_exe()
-                .map_err(anyhow::Error::from)
-                .and_then(|p| store.start_experimental(&p.with_file_name("glidepodctl")));
+            let result = store.start_background_vm();
             let _ = sender.send(Work::Started(result.map_err(|e| format!("{e:#}"))));
         });
         cx.notify();
@@ -699,17 +835,10 @@ impl Center {
         }
         self.runtime_revision += 1;
         self.working = true;
-        let owned = cx.global_mut::<AppSession>().owner.take().is_some();
         let store = self.store.clone();
         let sender = self.sender.clone();
         std::thread::spawn(move || {
-            let result = store.stop_vm().or_else(|e| {
-                if owned {
-                    store.runtime_status()
-                } else {
-                    Err(e)
-                }
-            });
+            let result = store.stop_background_vm();
             let _ = sender.send(Work::Stopped(result.map_err(|e| format!("{e:#}"))));
         });
         cx.notify();
@@ -748,7 +877,22 @@ impl Center {
             }
         }).detach();
     }
-    fn choose_gpu(&mut self, cx: &mut Context<Self>) {
+    fn select_gpu(&mut self, driver: glidepod_runtime::gpu::VulkanDriver, cx: &mut Context<Self>) {
+        if self.working || self.runtime.active() {
+            return;
+        }
+        self.working = true;
+        let store = self.store.clone();
+        let sender = self.sender.clone();
+        std::thread::spawn(move || {
+            let result = store
+                .select_gpu_driver(driver)
+                .map(|_| format!("{} selected for the next Metal start.", driver.label()));
+            let _ = sender.send(Work::Image(result.map_err(|e| format!("{e:#}"))));
+        });
+        cx.notify();
+    }
+    fn choose_gpu(&mut self, driver: glidepod_runtime::gpu::VulkanDriver, cx: &mut Context<Self>) {
         if self.working || self.picking_file || self.runtime.active() {
             return;
         }
@@ -757,15 +901,32 @@ impl Center {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Register experimental GPU renderer".into()),
+            prompt: Some(format!("Register {} renderer", driver.label()).into()),
         });
-        cx.spawn(async move |this,cx| {
-            let result = paths.await; let _ = this.update(cx,|this,_|this.picking_file = false);
-            if let Ok(Ok(Some(paths))) = result && let Some(path) = paths.into_iter().next() { let _ = this.update(cx,|this,cx| {
-                this.working = true; let store = this.store.clone(); let sender = this.sender.clone();
-                std::thread::spawn(move || { let result = store.register_gpu(&path).map(|_|"Experimental GPU renderer registered. Select Metal for the next start.".into()); let _ = sender.send(Work::Image(result.map_err(|e|format!("{e:#}")))); }); cx.notify();
-            }); }
-        }).detach();
+        cx.spawn(async move |this, cx| {
+            let result = paths.await;
+            let _ = this.update(cx, |this, _| this.picking_file = false);
+            if let Ok(Ok(Some(paths))) = result
+                && let Some(path) = paths.into_iter().next()
+            {
+                let _ = this.update(cx, |this, cx| {
+                    this.working = true;
+                    let store = this.store.clone();
+                    let sender = this.sender.clone();
+                    std::thread::spawn(move || {
+                        let result = store.register_gpu_with_driver(&path, driver).map(|_| {
+                            format!(
+                                "{} registered and selected for the next Metal start.",
+                                driver.label()
+                            )
+                        });
+                        let _ = sender.send(Work::Image(result.map_err(|e| format!("{e:#}"))));
+                    });
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
     fn inspect(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if self.apk.is_some() {
@@ -990,10 +1151,11 @@ fn main() -> anyhow::Result<()> {
         gpui_component::init(cx);
         let notifications =
             notification_bridge::NotificationBridge::new(store.clone(), incoming.clone());
+        let tray = tray::Service::new(store.clone()).expect("Create GlidePod menu bar item");
         cx.set_global(AppSession {
             store,
+            tray,
             incoming: incoming.clone(),
-            owner: None,
             center: None,
             windows: Default::default(),
             notifications,
@@ -1002,23 +1164,38 @@ fn main() -> anyhow::Result<()> {
         apply_theme(config.dark_mode, cx);
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-w", CloseWindow, None),
+            KeyBinding::new("cmd-,", ShowSettings, Some("GlidePod")),
             KeyBinding::new("cmd-o", ChooseApk, Some("GlidePod")),
             KeyBinding::new("cmd-k", FocusSearch, Some("GlidePod")),
             KeyBinding::new("cmd-f", FocusSearch, Some("GlidePod")),
             KeyBinding::new("escape", ClearSearch, Some("GlidePod")),
             KeyBinding::new("cmd-r", Refresh, Some("GlidePod")),
         ]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &Quit, cx| quit_glidepod(cx));
+        cx.on_action(|_: &CloseWindow, cx| {
+            if let Some(handle) = cx.active_window() {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            }
+        });
+        cx.on_action(|_: &ShowVmStatus, cx| cx.global::<AppSession>().tray.show());
         cx.set_menus(vec![
             Menu {
                 name: "GlidePod".into(),
-                items: vec![MenuItem::action("Quit GlidePod", Quit)],
+                items: vec![
+                    MenuItem::action("VM Status", ShowVmStatus),
+                    MenuItem::action("Settings…", ShowSettings),
+                    MenuItem::separator(),
+                    MenuItem::action("Quit GlidePod", Quit),
+                ],
             },
             Menu {
                 name: "File".into(),
                 items: vec![
                     MenuItem::action("Add APK…", ChooseApk),
                     MenuItem::action("Refresh", Refresh),
+                    MenuItem::separator(),
+                    MenuItem::action("Close Window", CloseWindow),
                 ],
             },
             Menu {
@@ -1042,6 +1219,7 @@ fn main() -> anyhow::Result<()> {
                     .timer(Duration::from_millis(200))
                     .await;
                 let _ = cx.update(|cx| {
+                    tray::poll(cx);
                     let pending = cx
                         .global::<AppSession>()
                         .incoming
@@ -1065,8 +1243,9 @@ fn main() -> anyhow::Result<()> {
             }
         })
         .detach();
+        // The lightweight agent takes over the menu bar when the last window closes.
         cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
+            if cx.windows().is_empty() && !cx.global::<AppSession>().google.lock().unwrap().busy {
                 cx.quit();
             }
         })
@@ -1107,4 +1286,37 @@ fn open_center(cx: &mut App) -> anyhow::Result<()> {
     )?;
     cx.global_mut::<AppSession>().center = Some(handle);
     Ok(())
+}
+
+fn quit_glidepod(cx: &mut App) {
+    let store = cx.global::<AppSession>().store.clone();
+    cx.spawn(async move |cx| {
+        let result = cx
+            .background_executor()
+            .spawn(async move { store.quit_background() })
+            .await;
+        let _ = cx.update(|cx| {
+            if let Err(error) = result {
+                let _ = open_center(cx);
+                if let Some(handle) = cx.global::<AppSession>().center {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        let prompt = window.prompt(
+                            PromptLevel::Warning,
+                            "Could not finish quitting GlidePod",
+                            Some(&format!("{error:#}")),
+                            &["OK"],
+                            cx,
+                        );
+                        cx.spawn(async move |_, _| {
+                            let _ = prompt.await;
+                        })
+                        .detach();
+                    });
+                }
+            } else {
+                cx.quit();
+            }
+        });
+    })
+    .detach();
 }

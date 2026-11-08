@@ -17,9 +17,17 @@ public final class MainActivity extends Activity {
         super.onCreate(state);getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         String run=getIntent().getStringExtra("run");
         if(run==null){TextView t=new TextView(this);t.setText("Run a 3D check from GlidePod Graphics.");setContentView(t);return;}
+        String stress=getIntent().getStringExtra("stress");
+        if(stress!=null){
+            int seconds=getIntent().getIntExtra("seconds",30);
+            if(!run.matches("[a-f0-9]{16,64}")||seconds<1||seconds>120||!(stress.equals("draw_calls")||stress.equals("fragment")||stress.equals("texture")))throw new IllegalArgumentException("Invalid stress parameters");
+            Results.json="{\"ready\":false}";
+            view=new GLSurfaceView(this);view.setEGLContextClientVersion(3);view.setEGLConfigChooser(8,8,8,8,0,0);
+            view.setRenderer(new Stress(view,run,stress,seconds));setContentView(view);return;
+        }
         int gles=getIntent().getIntExtra("gles",2);
         int objects=getIntent().getIntExtra("objects",16),samples=getIntent().getIntExtra("samples",180);
-        if((gles!=2&&gles!=3)||!run.matches("[a-f0-9]{16,64}") || objects<1||objects>64||samples<60||samples>600)throw new IllegalArgumentException("Invalid benchmark parameters");
+        if((gles!=2&&gles!=3)||!run.matches("[a-f0-9]{16,64}") || objects<1||objects>64||samples<60||samples>3600)throw new IllegalArgumentException("Invalid benchmark parameters");
         Results.json="{\"ready\":false}";
         if(gles==3&&!Gles3Checks.available()){
             Results.json="{\"ready\":true,\"run\":\""+run+"\",\"error\":\"No ES 3 EGL configuration on this renderer\"}";
@@ -108,6 +116,7 @@ public final class MainActivity extends Activity {
                 for(int i=0;i<width*height;i++){int green=pixel.get(i*4+1)&255;if(green>40)changed++;}
                 JSONObject o=new JSONObject().put("ready",true).put("run",run).put("vendor",vendor).put("renderer",renderer).put("version",version).put("extensions",extensions)
                     .put("requested_gles",gles).put("width",width).put("height",height).put("objects",objects).put("triangles_per_frame",objects*1024).put("warmup_seconds",2).put("gles3_probe",gles3)
+                    .put("display_refresh_rate_hz",getDisplay().getRefreshRate()).put("display_mode_refresh_rate_hz",getDisplay().getMode().getRefreshRate())
                     .put("finish_each_frame",finish).put("draw_ms",draw).put("frame_interval_ms",interval).put("colored_pixels",changed).put("gl_error",GLES20.glGetError());
                 Results.json=o.toString();complete=true;view.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
             }

@@ -109,7 +109,13 @@ pub struct BenchmarkReport {
     pub epoch: u64,
     #[serde(default)]
     pub display_id: u32,
+    /// None for historical reports that did not record the running display rate.
+    #[serde(default)]
+    pub configured_refresh_rate_hz: Option<u32>,
     pub renderer: glidepod_core::Renderer,
+    /// None in historical reports and for guest software rendering.
+    #[serde(default)]
+    pub vulkan_driver: Option<crate::gpu::VulkanDriver>,
     pub request: BenchmarkRequest,
     pub recorded_unix_ms: u64,
     pub draw: Timing,
@@ -123,6 +129,11 @@ pub struct BenchmarkReport {
     pub host_frames: u64,
     pub host_rgba_bytes: u64,
     pub host_read: Option<Timing>,
+    /// Intervals between successful unique copied frames during the whole capture.
+    #[serde(default)]
+    pub host_capture_interval: Option<Timing>,
+    #[serde(default)]
+    pub host_capture_fps: Option<f64>,
     /// Legacy separate conversion measurement; current reads include normalization.
     pub host_bgra_conversion: Option<Timing>,
     /// Distinguishes current direct BGRA reads from historical RGBA-then-BGRA runs.
@@ -142,13 +153,37 @@ impl Drop for Stop {
         self.0.store(true, Ordering::Release);
     }
 }
-struct StopWorkload(Guest, &'static str);
+pub(crate) struct StopWorkload(pub(crate) Guest, pub(crate) &'static str);
 impl Drop for StopWorkload {
     fn drop(&mut self) {
         let _ = self.0.stop_app(self.1);
     }
 }
+fn workload_base_apk(paths: &str) -> Option<&str> {
+    let mut lines = paths.lines();
+    let path = lines.next()?.strip_prefix("package:")?;
+    (lines.next().is_none() && path.starts_with("/data/app/") && path.ends_with("/base.apk"))
+        .then_some(path)
+}
+
 impl Guest {
+    /// Reinstalling an unchanged fixture can relaunch unrelated activities when
+    /// Android updates asset paths. Reuse only the exact, unsplit local APK.
+    pub(crate) fn ensure_workload_apk(&self, apk: &str, package: &str) -> Result<()> {
+        let source = resource(apk)?;
+        let expected = crate::experimental::digest(&source)?;
+        let installed = self.shell(&format!("pm path {}", quote(package)));
+        if let Ok(paths) = installed
+            && let Some(path) = workload_base_apk(&paths)
+            && let Ok(hash) = self.shell(&format!("sha256sum {}", quote(path)))
+            && hash.split_ascii_whitespace().next() == Some(expected.as_str())
+        {
+            return Ok(());
+        }
+        self.install(&source, Some(&expected))?;
+        Ok(())
+    }
+
     pub fn benchmark(&self, r: BenchmarkRequest) -> Result<BenchmarkReport> {
         let vulkan = r.api == GraphicsApi::Vulkan;
         ensure!(
@@ -156,7 +191,7 @@ impl Guest {
                 && (320..=2048).contains(&r.width)
                 && (320..=2048).contains(&r.height)
                 && (1..=64).contains(&r.objects)
-                && (60..=if vulkan { 3600 } else { 600 }).contains(&r.samples),
+                && (60..=3600).contains(&r.samples),
             "Benchmark parameters outside supported bounds"
         );
         ensure!(
@@ -167,9 +202,8 @@ impl Guest {
             },
             "Vulkan does not accept --gles or --finish-each-frame; validation, negative control, no-recreate and trace-stages require Vulkan"
         );
-        let renderer = self
-            .store
-            .runtime_status()?
+        let status = self.store.runtime_status()?;
+        let renderer = status
             .effective_renderer
             .ok_or_else(|| anyhow::anyhow!("Android renderer unavailable"))?;
         let (package, apk, authority) = if vulkan {
@@ -185,7 +219,7 @@ impl Guest {
                 "dev.glidepod.benchmark.results",
             )
         };
-        self.install(&resource(apk)?, None)?;
+        self.ensure_workload_apk(apk, package)?;
         self.stop_app(package)?;
         let window = self.open_app(package, r.width, r.height)?;
         let _workload = StopWorkload(self.clone(), package);
@@ -223,8 +257,16 @@ impl Guest {
         let mut count = 0;
         let mut bytes = 0;
         let mut reads = Vec::new();
+        let mut capture_intervals = Vec::new();
+        let mut last_capture: Option<Instant> = None;
+        let frame_period = window.info.frame_period();
+        let mut notifications = r
+            .capture_frames
+            .then(|| window.subscribe_frames())
+            .transpose()?;
         let mut last = None;
         let raw = loop {
+            let polled = Instant::now();
             if let Ok(result) = rx.try_recv() {
                 break result?;
             }
@@ -233,11 +275,24 @@ impl Guest {
                 "3D check timed out; Android may have stopped rendering"
             );
             if r.capture_frames {
+                if !notifications
+                    .as_mut()
+                    .unwrap()
+                    .wait(Duration::from_millis(100))?
+                {
+                    continue;
+                }
                 let before = Instant::now();
                 if let Some(frame) =
                     window.frame_in_format(seq, crate::display::PixelFormat::Bgra)?
                 {
                     reads.push(before.elapsed().as_secs_f64() * 1000.);
+                    let captured = Instant::now();
+                    if let Some(previous) = last_capture {
+                        capture_intervals
+                            .push(captured.duration_since(previous).as_secs_f64() * 1000.);
+                    }
+                    last_capture = Some(captured);
                     seq = frame.sequence;
                     count += 1;
                     bytes += frame.pixels.len() as u64;
@@ -246,7 +301,9 @@ impl Guest {
             } else {
                 self.verify_epoch()?;
             }
-            thread::sleep(Duration::from_millis(16));
+            if !r.capture_frames {
+                thread::sleep(frame_period.saturating_sub(polled.elapsed()));
+            }
         };
         let out = self.store.root().join("developer/benchmark");
         fs::create_dir_all(&out)?;
@@ -303,6 +360,11 @@ impl Guest {
             "Incomplete benchmark samples"
         );
         let frame_interval = timing(&interval)?;
+        let host_capture_interval = if capture_intervals.is_empty() {
+            None
+        } else {
+            Some(timing(&capture_intervals)?)
+        };
         let device_timestamp = if vulkan {
             let values: Vec<f64> = serde_json::from_value(raw["device_timestamp_ms"].clone())?;
             ensure!(
@@ -320,7 +382,9 @@ impl Guest {
         let report = BenchmarkReport {
             epoch: self.endpoints.epoch,
             display_id: window.info.display_id,
+            configured_refresh_rate_hz: Some(window.info.refresh_rate_hz),
             renderer,
+            vulkan_driver: status.vulkan_driver,
             request: r,
             recorded_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64,
             draw: timing(&draw)?,
@@ -335,6 +399,8 @@ impl Guest {
             frames_over_33_33_ms: interval.iter().filter(|v| **v > 1000. / 30.).count(),
             host_frames: count,
             host_rgba_bytes: bytes,
+            host_capture_fps: host_capture_interval.as_ref().map(|t| 1000. / t.mean_ms),
+            host_capture_interval,
             host_read: if reads.is_empty() {
                 None
             } else {
@@ -376,6 +442,23 @@ impl Guest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workload_reuse_requires_one_private_base_apk() {
+        assert_eq!(
+            workload_base_apk("package:/data/app/~~id/dev.test-token/base.apk\n"),
+            Some("/data/app/~~id/dev.test-token/base.apk")
+        );
+        for paths in [
+            "",
+            "package:/system/app/test/base.apk\n",
+            "package:/data/app/test/split_config.apk\n",
+            "package:/data/app/test/base.apk\npackage:/data/app/test/split_config.apk\n",
+            "Error: unknown package",
+        ] {
+            assert!(workload_base_apk(paths).is_none());
+        }
+    }
+
     #[test]
     fn percentile_and_invalid_samples() {
         let t = timing(&[1., 2., 3., 4., 100.]).unwrap();

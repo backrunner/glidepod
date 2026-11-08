@@ -3,26 +3,40 @@ fn main() {
     println!("cargo:rerun-if-changed=src/gamepad.m");
     println!("cargo:rerun-if-changed=src/notifications.m");
     println!("cargo:rerun-if-changed=src/network.m");
+    println!("cargo:rerun-if-changed=src/location.m");
     println!("cargo:rerun-if-changed=src/download.m");
     println!("cargo:rerun-if-changed=src/files.m");
     println!("cargo:rerun-if-changed=src/gestures.m");
+    println!("cargo:rerun-if-changed=src/launchers.m");
+    println!("cargo:rerun-if-changed=src/tray.m");
+    println!("cargo:rerun-if-changed=src/process_usage.c");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()
             .file("src/gamepad.m")
             .file("src/notifications.m")
             .file("src/network.m")
+            .file("src/location.m")
             .file("src/download.m")
             .file("src/files.m")
             .file("src/gestures.m")
+            .file("src/launchers.m")
+            .file("src/tray.m")
             .flag("-fobjc-arc")
             .warnings_into_errors(true)
             .compile("glidepod_gamepad");
+        cc::Build::new()
+            .file("src/process_usage.c")
+            .warnings_into_errors(true)
+            .compile("glidepod_process_usage");
         println!("cargo:rustc-link-lib=framework=GameController");
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rustc-link-lib=framework=CoreServices");
         println!("cargo:rustc-link-lib=framework=UniformTypeIdentifiers");
         println!("cargo:rustc-link-lib=framework=ImageIO");
         println!("cargo:rustc-link-lib=framework=CFNetwork");
+        println!("cargo:rustc-link-lib=framework=vmnet");
+        println!("cargo:rustc-link-lib=framework=CoreLocation");
         println!("cargo:rustc-link-lib=framework=UserNotifications");
     }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")

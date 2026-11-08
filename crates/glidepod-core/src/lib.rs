@@ -31,6 +31,20 @@ pub enum Renderer {
     Metal,
     Software,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryMode {
+    #[default]
+    Manual,
+    Automatic,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeMode {
+    #[default]
+    Automatic,
+    Resident,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum VmState {
@@ -45,16 +59,27 @@ pub enum VmState {
 #[serde(deny_unknown_fields)]
 pub struct ProfileSettings {
     pub memory_mib: u32,
+    /// Old configurations retain their manual allocation until explicitly changed.
+    #[serde(default)]
+    pub memory_mode: MemoryMode,
     pub vcpus: u16,
     pub renderer: Renderer,
+    /// Guest display timing; existing profiles keep 60 Hz until explicitly changed.
+    #[serde(default = "default_refresh_rate_hz")]
+    pub refresh_rate_hz: u32,
     pub root_requested: bool,
+}
+pub fn default_refresh_rate_hz() -> u32 {
+    60
 }
 impl Default for ProfileSettings {
     fn default() -> Self {
         Self {
             memory_mib: 4096,
+            memory_mode: MemoryMode::Automatic,
             vcpus: 4,
             renderer: Renderer::Automatic,
+            refresh_rate_hz: default_refresh_rate_hz(),
             root_requested: false,
         }
     }
@@ -67,6 +92,8 @@ pub enum PolicyError {
     Memory,
     #[error("Virtual CPU count must be between 1 and 16.")]
     Cpu,
+    #[error("Display refresh rate must be 60, 90 or 120 Hz.")]
+    RefreshRate,
     #[error("This operation is not valid in the current VM state.")]
     InvalidTransition,
     #[error("The event belongs to an expired VM generation.")]
@@ -82,6 +109,9 @@ impl ProfileSettings {
         }
         if !(1..=16).contains(&self.vcpus) {
             return Err(PolicyError::Cpu);
+        }
+        if ![60, 90, 120].contains(&self.refresh_rate_hz) {
+            return Err(PolicyError::RefreshRate);
         }
         Ok(())
     }
@@ -225,5 +255,21 @@ mod tests {
         );
         s.memory_mib = 1;
         assert_eq!(s.validate(ProfileId::Developer), Err(PolicyError::Memory));
+    }
+    #[test]
+    fn display_rates_are_bounded_and_opt_in() {
+        let mut settings = ProfileSettings::default();
+        assert_eq!(settings.refresh_rate_hz, 60);
+        for hz in [60, 90, 120] {
+            settings.refresh_rate_hz = hz;
+            assert_eq!(settings.validate(ProfileId::Developer), Ok(()));
+        }
+        for hz in [0, 30, 59, 80, 144, u32::MAX] {
+            settings.refresh_rate_hz = hz;
+            assert_eq!(
+                settings.validate(ProfileId::Developer),
+                Err(PolicyError::RefreshRate)
+            );
+        }
     }
 }

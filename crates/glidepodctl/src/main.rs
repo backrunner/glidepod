@@ -19,6 +19,26 @@ enum Operation {
     Doctor,
     /// Inspect macOS system proxies and the pinned VMM's coverage; no traffic or settings changes.
     Network,
+    /// Select Shared or Bridged networking; changes apply at the next Android start.
+    NetworkMode {
+        #[arg(value_enum)]
+        mode: Option<NetworkChoice>,
+        #[arg(long)]
+        interface: Option<String>,
+    },
+    /// Select Off, Host (Core Location), or a fixed Virtual location.
+    Location {
+        #[arg(value_enum)]
+        source: Option<LocationChoice>,
+        #[arg(long, allow_hyphen_values = true)]
+        latitude: Option<f64>,
+        #[arg(long, allow_hyphen_values = true)]
+        longitude: Option<f64>,
+        #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+        altitude: f64,
+        #[arg(long, default_value_t = 10.0)]
+        accuracy: f64,
+    },
     /// Inventory Google services in the running guest; does not claim API or certification success.
     Gms,
     /// Install, remove or recover optional Google services with transactional disk recovery.
@@ -30,6 +50,8 @@ enum Operation {
     Probe,
     /// Read runtime truth. No backend is reported ready before qualification.
     Status,
+    /// Inspect guest RAM backing without double-counting host/guest mappings.
+    Memory,
     /// Parse APK manifest and ABI metadata locally; does not install or verify signatures.
     InspectApk { path: PathBuf },
     /// Check image files against a local provenance manifest; does not boot them.
@@ -41,12 +63,21 @@ enum Operation {
     },
     /// Save resource settings; future runtime starts apply them.
     Configure {
+        #[arg(long, value_enum)]
+        builtin_apps: Option<BuiltinAppsChoice>,
+        #[arg(long, value_enum)]
+        runtime_mode: Option<RuntimeModeChoice>,
+        #[arg(long, value_enum)]
+        memory_mode: Option<MemoryModeChoice>,
         #[arg(long)]
         memory_mib: Option<u32>,
         #[arg(long)]
         cpus: Option<u16>,
         #[arg(long, value_enum)]
         renderer: Option<RendererChoice>,
+        /// Guest display rate, applied at the next start: 60, 90 or 120 Hz.
+        #[arg(long)]
+        refresh_rate: Option<u32>,
     },
     /// Register local evaluation artifacts. Does not distribute or qualify them.
     RegisterExperimental {
@@ -57,14 +88,49 @@ enum Operation {
         #[arg(long)]
         fingerprint: String,
     },
-    /// Pin a locally built experimental gfxstream / MoltenVK renderer.
-    RegisterGpu { directory: PathBuf },
+    /// Pin an external gfxstream renderer and its Vulkan-to-Metal driver.
+    RegisterGpu {
+        directory: PathBuf,
+        #[arg(long, value_enum, default_value_t = VulkanDriverChoice::Moltenvk)]
+        driver: VulkanDriverChoice,
+    },
+    /// Show registered Vulkan drivers, or select one for the next Metal start.
+    GpuDriver {
+        #[arg(value_enum)]
+        driver: Option<VulkanDriverChoice>,
+    },
+    /// Run an uncapped offscreen GLES workload; measures completion, not display FPS.
+    GraphicsStress {
+        #[arg(long, value_enum)]
+        workload: StressChoice,
+        #[arg(long, default_value_t = 1024)]
+        width: u32,
+        #[arg(long, default_value_t = 1024)]
+        height: u32,
+        #[arg(long, default_value_t = 30)]
+        seconds: u32,
+    },
+    /// Run an uncapped indexed Vulkan scene with fence completion per frame.
+    VulkanStress {
+        #[arg(long, default_value_t = 1024)]
+        width: u32,
+        #[arg(long, default_value_t = 1024)]
+        height: u32,
+        #[arg(long, default_value_t = 256)]
+        objects: u32,
+        #[arg(long, default_value_t = 30)]
+        seconds: u32,
+        #[arg(long)]
+        validation: bool,
+    },
     /// Start an experimental Developer VM in the foreground; Ctrl-C stops it.
     Start,
     /// Stop the live session owned by the app or a foreground CLI.
     Stop,
     /// Refresh the launchable Android app catalog.
     Apps,
+    /// Reconcile installed apps with Finder and Spotlight entries without launching them.
+    SyncLaunchers,
     /// Query Android app sizes and requested runtime permissions.
     AppInfo { package: String },
     /// Query free and total bytes on Android's data filesystem.
@@ -137,13 +203,55 @@ enum Operation {
     },
     #[command(hide = true)]
     RuntimeWorker,
+    #[command(hide = true)]
+    BackgroundWorker,
+    /// Inspect the live window-independent VM/notification owner.
+    BackgroundStatus,
+    /// Start Android under the persistent background owner.
+    BackgroundStart,
+    /// Stop the background runtime and exit its menu bar/notification agent.
+    BackgroundQuit,
+    /// Keep a package online for push/background work even with no open window.
+    BackgroundApp {
+        package: String,
+        #[arg(long)]
+        disable: bool,
+    },
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum RuntimeModeChoice {
+    Automatic,
+    Resident,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum MemoryModeChoice {
+    Automatic,
+    Manual,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum GoogleAction {
     Install,
     Remove,
+    Enable,
+    Disable,
     Recover,
     Status,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum NetworkChoice {
+    Shared,
+    Bridged,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum LocationChoice {
+    Off,
+    Host,
+    Virtual,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum BuiltinAppsChoice {
+    Minimal,
+    Full,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum ProfileChoice {
@@ -160,6 +268,17 @@ enum RendererChoice {
     Automatic,
     Metal,
     Software,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum VulkanDriverChoice {
+    Moltenvk,
+    Kosmickrisp,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum StressChoice {
+    DrawCalls,
+    Fragment,
+    Texture,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum PermissionChoice {
@@ -198,6 +317,18 @@ fn run(args: Args) -> Result<()> {
             );
             (serde_json::to_value(report)?, summary, true)
         }
+        Operation::Memory => {
+            let report = store()?.guest()?.memory_residency()?;
+            let summary = format!(
+                "Guest RAM backing: {:.0} MiB resident · {:.0} MiB paged out (logical) · {:.0} MiB unbacked\nCapacity: {:.0} MiB · scan: {} ms\nExcludes VMM/graphics allocations. macOS process footprint can count host/guest aliases twice; these values are not the total VM process footprint.",
+                report.resident_bytes as f64 / 1048576.,
+                report.paged_out_bytes as f64 / 1048576.,
+                report.unbacked_bytes as f64 / 1048576.,
+                report.capacity_bytes as f64 / 1048576.,
+                report.scan_ms,
+            );
+            (serde_json::to_value(report)?, summary, true)
+        }
         Operation::Probe => {
             let report = glidepod_macos::run_probes();
             let passed = report.probes.iter().all(|p| p.passed);
@@ -215,6 +346,93 @@ fn run(args: Args) -> Result<()> {
                 .collect::<Vec<_>>()
                 .join("\n");
             (serde_json::to_value(report)?, summary, passed)
+        }
+        Operation::NetworkMode { mode, interface } => {
+            let store = store()?;
+            if let Some(mode) = mode {
+                let mode = match mode {
+                    NetworkChoice::Shared => glidepod_runtime::network::Mode::Shared,
+                    NetworkChoice::Bridged => glidepod_runtime::network::Mode::Bridged,
+                };
+                let selected = glidepod_runtime::network::Configuration { mode, interface };
+                selected.validate()?;
+                if mode == glidepod_runtime::network::Mode::Bridged {
+                    anyhow::ensure!(
+                        glidepod_macos::network::bridge_interfaces()?
+                            .contains(selected.interface.as_ref().unwrap()),
+                        "Bridge interface is unavailable"
+                    );
+                }
+                let config = store.load()?;
+                store.update(config.revision, |c| c.network = selected)?;
+            } else {
+                anyhow::ensure!(
+                    interface.is_none(),
+                    "Choose a network mode with --interface"
+                );
+            }
+            let config = store.load()?;
+            let runtime = store.runtime_status()?;
+            let startup = if let glidepod_core::VmState::Running { epoch } = runtime.vm {
+                store.network_startup_status(epoch)
+            } else {
+                None
+            };
+            let effective = if matches!(runtime.vm, glidepod_core::VmState::Running { .. }) {
+                runtime.effective_network
+            } else {
+                None
+            };
+            (
+                serde_json::json!({"desired":config.network,"effective":effective,"startup":startup,"bridge_interfaces":glidepod_macos::network::bridge_interfaces()?}),
+                format!(
+                    "Network: {:?}. Changes apply at the next Android start; bridge failures never fall back to Shared.",
+                    config.network.mode
+                ),
+                true,
+            )
+        }
+        Operation::Location {
+            source,
+            latitude,
+            longitude,
+            altitude,
+            accuracy,
+        } => {
+            let store = store()?;
+            if let Some(source) = source {
+                let source = match source {
+                    LocationChoice::Off => glidepod_runtime::location::Source::Off,
+                    LocationChoice::Host => glidepod_runtime::location::Source::Host,
+                    LocationChoice::Virtual => glidepod_runtime::location::Source::Virtual,
+                };
+                let point = if source == glidepod_runtime::location::Source::Virtual {
+                    Some(glidepod_runtime::location::Point {
+                        latitude: latitude.ok_or_else(|| anyhow::anyhow!("Provide --latitude"))?,
+                        longitude: longitude
+                            .ok_or_else(|| anyhow::anyhow!("Provide --longitude"))?,
+                        altitude,
+                        accuracy,
+                    })
+                } else {
+                    anyhow::ensure!(
+                        latitude.is_none() && longitude.is_none(),
+                        "Coordinates require Virtual location"
+                    );
+                    None
+                };
+                let selected = glidepod_runtime::location::Configuration { source, point };
+                selected.validate()?;
+                let config = store.load()?;
+                store.update(config.revision, |c| c.location = selected)?;
+            } else {
+                anyhow::ensure!(
+                    latitude.is_none() && longitude.is_none(),
+                    "Choose Virtual location to set coordinates"
+                );
+            }
+            let status = store.location_status()?;
+            (serde_json::to_value(&status)?, status.message, true)
         }
         Operation::Network => {
             let proxy = glidepod_macos::network::system_proxy_snapshot()?;
@@ -257,7 +475,10 @@ fn run(args: Args) -> Result<()> {
                     serde_json::json!({"installation":store.google_apps_installation()?,"recovery_pending":store.google_apps_recovery_pending()})
                 ),
                 GoogleAction::Recover => store.recover_google_apps()?,
-                GoogleAction::Install | GoogleAction::Remove => {
+                GoogleAction::Install
+                | GoogleAction::Remove
+                | GoogleAction::Enable
+                | GoogleAction::Disable => {
                     static CANCEL: std::sync::atomic::AtomicBool =
                         std::sync::atomic::AtomicBool::new(false);
                     extern "C" fn cancel(_: libc::c_int) {
@@ -268,10 +489,12 @@ fn run(args: Args) -> Result<()> {
                     }
                     store.manage_google_apps(
                         &std::env::current_exe()?,
-                        if matches!(action, GoogleAction::Install) {
-                            glidepod_runtime::google_apps::Action::Install
-                        } else {
-                            glidepod_runtime::google_apps::Action::Remove
+                        match action {
+                            GoogleAction::Install => glidepod_runtime::google_apps::Action::Install,
+                            GoogleAction::Remove => glidepod_runtime::google_apps::Action::Remove,
+                            GoogleAction::Enable => glidepod_runtime::google_apps::Action::Enable,
+                            GoogleAction::Disable => glidepod_runtime::google_apps::Action::Disable,
+                            _ => unreachable!(),
                         },
                         &CANCEL,
                         &mut |p| {
@@ -333,19 +556,42 @@ fn run(args: Args) -> Result<()> {
             )
         }
         Operation::Configure {
+            builtin_apps,
+            runtime_mode,
+            memory_mode,
             memory_mib,
             cpus,
             renderer,
+            refresh_rate,
         } => {
             let store = store()?;
             let c = store.load()?;
             let c = store.update(c.revision, |c| {
+                if let Some(mode) = builtin_apps {
+                    c.minimal_builtin_apps = matches!(mode, BuiltinAppsChoice::Minimal);
+                }
+                if let Some(mode) = runtime_mode {
+                    c.runtime_mode = match mode {
+                        RuntimeModeChoice::Automatic => glidepod_core::RuntimeMode::Automatic,
+                        RuntimeModeChoice::Resident => glidepod_core::RuntimeMode::Resident,
+                    };
+                }
                 let s = c.settings_mut();
                 if let Some(v) = memory_mib {
                     s.memory_mib = v;
+                    s.memory_mode = glidepod_core::MemoryMode::Manual;
+                }
+                if let Some(mode) = memory_mode {
+                    s.memory_mode = match mode {
+                        MemoryModeChoice::Automatic => glidepod_core::MemoryMode::Automatic,
+                        MemoryModeChoice::Manual => glidepod_core::MemoryMode::Manual,
+                    };
                 }
                 if let Some(v) = cpus {
                     s.vcpus = v;
+                }
+                if let Some(v) = refresh_rate {
+                    s.refresh_rate_hz = v;
                 }
                 if let Some(v) = renderer {
                     s.renderer = match v {
@@ -379,11 +625,118 @@ fn run(args: Args) -> Result<()> {
                 true,
             )
         }
-        Operation::RegisterGpu { directory } => {
-            let gpu = store()?.register_gpu(&directory)?;
+        Operation::RegisterGpu { directory, driver } => {
+            use glidepod_runtime::gpu::VulkanDriver;
+            let driver = match driver {
+                VulkanDriverChoice::Moltenvk => VulkanDriver::MoltenVk,
+                VulkanDriverChoice::Kosmickrisp => VulkanDriver::KosmicKrisp,
+            };
+            let gpu = store()?.register_gpu_with_driver(&directory, driver)?;
             (serde_json::to_value(gpu)?, "Experimental GPU renderer registered. Select Metal explicitly; game compatibility remains unqualified.".into(), true)
         }
+        Operation::GpuDriver { driver } => {
+            if let Some(driver) = driver {
+                store()?.select_gpu_driver(match driver {
+                    VulkanDriverChoice::Moltenvk => glidepod_runtime::gpu::VulkanDriver::MoltenVk,
+                    VulkanDriverChoice::Kosmickrisp => {
+                        glidepod_runtime::gpu::VulkanDriver::KosmicKrisp
+                    }
+                })?;
+            }
+            let registry = store()?.gpu_registry()?;
+            let label = registry
+                .selected_driver
+                .map(|d| d.label())
+                .unwrap_or("None registered");
+            (
+                serde_json::to_value(&registry)?,
+                format!("Vulkan driver: {label}. Applies to Metal rendering on the next start."),
+                true,
+            )
+        }
+        Operation::VulkanStress {
+            width,
+            height,
+            objects,
+            seconds,
+            validation,
+        } => {
+            let report = store()?
+                .guest()?
+                .vulkan_stress(width, height, objects, seconds, validation)?;
+            let message = format!(
+                "Offscreen Vulkan · completion p95 {} ms · {} completed frames/s (not display FPS)",
+                report["guest"]["completion_ms"]["p95"],
+                report["guest"]["completed_frames_per_second"]
+            );
+            (report, message, true)
+        }
+        Operation::GraphicsStress {
+            workload,
+            width,
+            height,
+            seconds,
+        } => {
+            use glidepod_runtime::graphics_stress::{StressRequest, Workload};
+            let workload = match workload {
+                StressChoice::DrawCalls => Workload::DrawCalls,
+                StressChoice::Fragment => Workload::Fragment,
+                StressChoice::Texture => Workload::Texture,
+            };
+            let report = store()?.guest()?.graphics_stress(StressRequest {
+                workload,
+                width,
+                height,
+                seconds,
+            })?;
+            let message = format!(
+                "Offscreen GLES · {} · completion p95 {} ms · {} completed frames/s (not display FPS)",
+                workload.name(),
+                report["guest"]["completion_ms"]["p95"],
+                report["guest"]["completed_frames_per_second"]
+            );
+            (report, message, true)
+        }
         Operation::RuntimeWorker => return glidepod_runtime::experimental::run_worker(&store()?),
+        Operation::BackgroundWorker => return glidepod_runtime::background::run(store()?),
+        Operation::BackgroundQuit => {
+            store()?.quit_background()?;
+            (
+                serde_json::json!({"stopped":true}),
+                "Background service stopped.".into(),
+                true,
+            )
+        }
+        Operation::BackgroundStatus => (
+            serde_json::to_value(store()?.background_status()?)?,
+            "Background status".into(),
+            true,
+        ),
+        Operation::BackgroundStart => {
+            let store = store()?;
+            store.start_background_vm()?;
+            (
+                serde_json::to_value(store.background_status()?)?,
+                "Android is starting in the background.".into(),
+                true,
+            )
+        }
+        Operation::BackgroundApp { package, disable } => {
+            glidepod_runtime::guest::package_id(&package)?;
+            let store = store()?;
+            let c = store.load()?;
+            let c = store.update(c.revision, |c| {
+                c.background_apps.retain(|p| p != &package);
+                if !disable {
+                    c.background_apps.push(package);
+                }
+            })?;
+            (
+                serde_json::to_value(c)?,
+                "Background app preference saved.".into(),
+                true,
+            )
+        }
         Operation::AppInfo { package } => {
             let details = store()?.guest()?.app_details(&package)?;
             (
@@ -481,7 +834,7 @@ fn run(args: Args) -> Result<()> {
         }
         Operation::Start => return run_foreground(&store()?, args.json),
         Operation::Stop => {
-            let status = store()?.stop_vm()?;
+            let status = store()?.stop_background_vm()?;
             (
                 serde_json::to_value(status)?,
                 "Android shutdown requested.".into(),
@@ -498,15 +851,17 @@ fn run(args: Args) -> Result<()> {
             (serde_json::to_value(apps)?, text, true)
         }
         Operation::AddLauncher { package } => {
-            let apps = store()?.cached_apps()?;
+            let store = store()?;
+            let apps = store.cached_apps()?;
             let app = apps
                 .iter()
                 .find(|a| a.package_id == package)
                 .ok_or_else(|| anyhow::anyhow!("Refresh the app catalog first"))?;
-            let path = glidepod_macos::launchers::create(
+            let path = glidepod_macos::launchers::create_for_store(
                 &app.package_id,
                 &app.label,
                 app.icon_path.as_deref(),
+                store.root(),
             )?;
             (
                 serde_json::json!({"path":path}),
@@ -514,10 +869,21 @@ fn run(args: Args) -> Result<()> {
                 true,
             )
         }
+        Operation::SyncLaunchers => {
+            let catalog = store()?.guest()?.desktop_catalog()?;
+            let report = catalog.launchers;
+            let message = report.warning().unwrap_or_else(|| {
+                format!(
+                    "{} Mac app entries available; {} removed.",
+                    report.available, report.removed
+                )
+            });
+            (serde_json::to_value(report)?, message, true)
+        }
         Operation::Install { path } => {
             let guest = store()?.guest()?;
             let receipt = guest.install(&path, None)?;
-            let catalog = guest.catalog();
+            let catalog = guest.desktop_catalog();
             let message = format!(
                 "Installed {}{}",
                 receipt.package_id,
@@ -527,13 +893,30 @@ fn run(args: Args) -> Result<()> {
                     ""
                 }
             );
-            (serde_json::to_value(receipt)?, message, true)
+            let mut value = serde_json::to_value(receipt)?;
+            if let Ok(catalog) = catalog {
+                value["mac_launchers"] = serde_json::to_value(&catalog.launchers)?;
+                let message = catalog
+                    .launchers
+                    .warning()
+                    .map(|w| format!("{message}. {w}"))
+                    .unwrap_or(message);
+                (value, message, true)
+            } else {
+                (value, message, true)
+            }
         }
         Operation::Uninstall { package } => {
-            store()?.guest()?.uninstall(&package)?;
+            let guest = store()?.guest()?;
+            guest.uninstall(&package)?;
+            let report = guest.desktop_catalog()?.launchers;
+            let message = report
+                .warning()
+                .map(|w| format!("Removed {package}. {w}"))
+                .unwrap_or_else(|| format!("Removed {package}"));
             (
-                serde_json::json!({"removed":package}),
-                format!("Removed {package}"),
+                serde_json::json!({"removed":package,"mac_launchers":report}),
+                message,
                 true,
             )
         }

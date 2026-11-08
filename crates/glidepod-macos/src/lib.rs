@@ -1,13 +1,46 @@
 //! Small native probes. Host Metal capability is not Android acceleration evidence.
+pub mod dock;
 pub mod download;
 pub mod files;
 pub mod gamepad;
 pub mod gestures;
 pub mod launchers;
+pub mod location;
 pub mod network;
 pub mod notifications;
+pub mod process_usage;
+pub mod tray;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+
+pub fn physical_memory_mib() -> u64 {
+    let mut value = 0u64;
+    let mut len = std::mem::size_of_val(&value);
+    unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&mut value as *mut u64).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        );
+    }
+    value / 1024 / 1024
+}
+pub fn memory_pressure() -> u32 {
+    let mut value = 1u32;
+    let mut len = std::mem::size_of_val(&value);
+    unsafe {
+        libc::sysctlbyname(
+            c"kern.memorystatus_vm_pressure_level".as_ptr(),
+            (&mut value as *mut u32).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        );
+    }
+    value
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostReport {

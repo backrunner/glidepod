@@ -14,11 +14,15 @@ def run(*args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--output", type=Path, default=ROOT / "dist/GlidePod.app",
+                        help="Local bundle under dist; use a separate path for an active development app")
     args = parser.parse_args()
+    bundle = args.output.resolve()
+    if not bundle.is_relative_to(ROOT / "dist") or bundle.suffix != ".app":
+        parser.error("Output must be an .app bundle inside this project's dist directory")
     if not args.skip_build:
         run("python3", "tools/build-android.py")
         run("cargo", "build", "--workspace", "--locked")
-    bundle = ROOT / "dist/GlidePod.app"
     macos = bundle / "Contents/MacOS"
     resources = bundle / "Contents/Resources"
     macos.mkdir(parents=True, exist_ok=True)
@@ -63,6 +67,8 @@ def main():
         "CFBundleVersion": "1", "CFBundleShortVersionString": "0.1.0",
         "CFBundlePackageType": "APPL", "CFBundleIconFile": "GlidePod",
         "LSMinimumSystemVersion": "15.0", "NSHighResolutionCapable": True,
+        "NSLocationUsageDescription": "Share your Mac’s location with Android apps when you choose Follow Mac. Android apps still need location permission.",
+        "NSLocationWhenInUseUsageDescription": "Share your Mac’s location with Android apps when you choose Follow Mac.",
         "CFBundleURLTypes": [{"CFBundleURLName": "GlidePod app", "CFBundleURLSchemes": ["glidepod"]}],
         "CFBundleDocumentTypes": [{"CFBundleTypeName": "Android application package", "CFBundleTypeRole": "Viewer", "LSHandlerRank": "Alternate", "LSItemContentTypes": ["org.android.package-archive"]}],
         "UTImportedTypeDeclarations": [{"UTTypeIdentifier": "org.android.package-archive", "UTTypeDescription": "Android application package", "UTTypeConformsTo": ["public.zip-archive"], "UTTypeTagSpecification": {"public.filename-extension": ["apk"], "public.mime-type": ["application/vnd.android.package-archive"]}}],
@@ -71,6 +77,19 @@ def main():
         info.update(plistlib.load(file))
     with (bundle / "Contents/Info.plist").open("wb") as file:
         plistlib.dump(info, file)
+    # A separate, windowless identity owns notifications while the GPUI process is absent.
+    agent = bundle / "Contents/Library/LoginItems/GlidePod Background.app"
+    agent_bin = agent / "Contents/MacOS"
+    agent_bin.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(macos / "glidepodctl", agent_bin / "glidepodctl")
+    with (agent / "Contents/Info.plist").open("wb") as file:
+        plistlib.dump({"CFBundleName": "GlidePod Background", "CFBundleDisplayName": "GlidePod",
+            "CFBundleIdentifier": "dev.glidepod.background", "CFBundleExecutable": "glidepodctl",
+            "CFBundlePackageType": "APPL", "CFBundleVersion": "1", "CFBundleShortVersionString": "0.1.0",
+            "LSUIElement": True, "LSMinimumSystemVersion": "15.0",
+            "NSLocationUsageDescription": "Share your Mac’s location with Android apps when Follow Mac is enabled.",
+            "NSLocationWhenInUseUsageDescription": "Share your Mac’s location with Android apps when Follow Mac is enabled."}, file)
+    run("codesign", "--force", "--sign", "-", "--entitlements", ROOT / "macos/packaging/hypervisor.entitlements", agent)
     run("codesign", "--force", "--sign", "-", "--entitlements", ROOT / "macos/packaging/hypervisor.entitlements", macos / "glidepodctl")
     run("codesign", "--force", "--sign", "-", bundle)
     run("codesign", "--verify", "--deep", "--strict", bundle)

@@ -1,0 +1,386 @@
+diff --git a/engine/hvf/hvf/src/lib.rs b/engine/hvf/hvf/src/lib.rs
+index b0d1ee4..8933c2f 100644
+--- a/engine/hvf/hvf/src/lib.rs
++++ b/engine/hvf/hvf/src/lib.rs
+@@ -6,7 +6,7 @@ mod exit;
+ mod memory;
+ 
+ pub use exit::{ExceptionClass, Exit, MmioAccess, decode_exception};
+-pub use memory::GuestRegion;
++pub use memory::{GuestRegion, RECLAIM_BLOCK};
+ 
+ use hvf_sys as sys;
+ use std::fmt;
+@@ -113,9 +113,13 @@ impl Vm {
+ 
+     /// Maps host memory into the guest. `region` must outlive the mapping.
+     pub fn map(&self, region: &GuestRegion, protection: Protection) -> Result<()> {
+-        check("hv_vm_map", unsafe {
+-            sys::hv_vm_map(region.as_ptr().cast(), region.guest_address(), region.len(), protection.flags())
+-        })
++        for offset in (0..region.len()).step_by(RECLAIM_BLOCK) {
++            check("hv_vm_map", unsafe {
++                sys::hv_vm_map(region.as_ptr().add(offset).cast(), region.guest_address() + offset as u64,
++                    (region.len() - offset).min(RECLAIM_BLOCK), protection.flags())
++            })?;
++        }
++        Ok(())
+     }
+ 
+     pub fn unmap(&self, guest_address: u64, len: usize) -> Result<()> {
+diff --git a/engine/hvf/hvf/src/memory.rs b/engine/hvf/hvf/src/memory.rs
+index f869aeb..e7a7f3f 100644
+--- a/engine/hvf/hvf/src/memory.rs
++++ b/engine/hvf/hvf/src/memory.rs
+@@ -14,6 +14,7 @@ unsafe impl Send for GuestRegion {}
+ unsafe impl Sync for GuestRegion {}
+ 
+ pub const PAGE_SIZE: usize = 16 * 1024;
++pub const RECLAIM_BLOCK: usize = 64 * 1024;
+ 
+ unsafe extern "C" {
+     fn mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *mut u8;
+@@ -31,9 +32,38 @@ impl GuestRegion {
+         if ptr as isize == -1 {
+             return Err(std::io::Error::last_os_error());
+         }
++        // Distinct VM objects bound map fragmentation and permit replacement on macOS.
++        for offset in (0..len).step_by(RECLAIM_BLOCK) {
++            let size = (len - offset).min(RECLAIM_BLOCK);
++            let block = unsafe { mmap(ptr.add(offset), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | 0x10, -1, 0) };
++            if block as isize == -1 { unsafe { munmap(ptr, len); } return Err(std::io::Error::last_os_error()); }
++        }
+         Ok(GuestRegion { ptr: NonNull::new(ptr).unwrap(), len, guest_address })
+     }
+ 
++    /// The caller holds a guest-owned free-page report until every mapping is restored.
++    pub unsafe fn reclaim(&self, address: u64, len: usize) -> std::io::Result<usize> {
++        if !self.contains(address, len) || address % 65536 != 0 || len % 65536 != 0 {
++            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "unaligned/out-of-range reclaim"));
++        }
++        let mut reclaimed = 0;
++        let mut offset = 0;
++        while offset < len {
++            let ipa = address + offset as u64;
++            let chunk = if ipa % RECLAIM_BLOCK as u64 == 0 && len - offset >= RECLAIM_BLOCK { RECLAIM_BLOCK } else { 65536 };
++            let ptr = unsafe { self.as_ptr().add((ipa - self.guest_address) as usize) };
++            if unsafe { crate::sys::hv_vm_unmap(ipa, chunk) } != 0 { break; }
++            let fresh = unsafe { mmap(ptr, chunk, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | 0x10, -1, 0) };
++            // A failed replacement leaves the old object intact. Restore either object before ACK.
++            let mapped = unsafe { crate::sys::hv_vm_map(ptr.cast(), ipa, chunk, crate::Protection::RWX.flags()) };
++            if mapped != 0 { eprintln!("[memory] cannot restore guest mapping: {mapped}"); std::process::abort(); }
++            if fresh as isize == -1 { break; }
++            reclaimed += chunk;
++            offset += chunk;
++        }
++        Ok(reclaimed)
++    }
++
+     pub fn as_ptr(&self) -> *mut u8 {
+         self.ptr.as_ptr()
+     }
+diff --git a/engine/hvf/vmm/src/control.rs b/engine/hvf/vmm/src/control.rs
+index 821e10c..01b3a9f 100644
+--- a/engine/hvf/vmm/src/control.rs
++++ b/engine/hvf/vmm/src/control.rs
+@@ -336,6 +336,11 @@ impl Controls {
+             words.get(i).and_then(|w| w.parse().ok()).ok_or(format!("bad argument {i}"))
+         };
+         match words.first().copied() {
++            Some("memory") => {
++                let mib = int(1)?;
++                if mib < 0 || mib > 16384 { return Err("invalid balloon target".into()); }
++                crate::virtio::balloon::target(mib as u32 * 256)?;
++            }
+             Some("display") => {
+                 let index = int(1)? as usize;
+                 if words.get(2) == Some(&"off") {
+@@ -486,6 +491,14 @@ pub fn serve(path: &Path, controls: Arc<Controls>) -> Result<(), String> {
+                             }
+                             return;
+                         }
++                        if line.trim() == "memory-residency" {
++                            let _ = writeln!(writer, "{}", crate::virtio::balloon::residency());
++                            continue;
++                        }
++                        if line.trim() == "memory-status" {
++                            if writeln!(writer, "{}", crate::virtio::balloon::status()).is_err() { return; }
++                            continue;
++                        }
+                         let reply = match controls.run(line) {
+                             Ok(()) => "ok\n".to_string(),
+                             Err(e) => format!("error {e}\n"),
+diff --git a/engine/hvf/vmm/src/cuttlefish.rs b/engine/hvf/vmm/src/cuttlefish.rs
+index bc06d2e..eaf46f8 100644
+--- a/engine/hvf/vmm/src/cuttlefish.rs
++++ b/engine/hvf/vmm/src/cuttlefish.rs
+@@ -562,6 +562,7 @@ fn boot(options: &Options, renderer: Option<&RenderHost>, bluetooth: Option<&Arc
+     }
+     sensors.connect(sensor_ports[0].clone(), sensor_ports[1].clone());
+     machine.add_virtio(Box::new(Rng::default()));
++    machine.add_virtio(Box::new(crate::virtio::balloon::Balloon::default()));
+     // Guest CID 3 like Cuttlefish's first instance.
+     let vsock = Vsock::new(3, &options.runtime.join("vsock.sock")).map_err(|e| format!("vsock: {e}"))?;
+     modem::serve(&options.runtime.join(format!("vsock.sock_{}", modem::PORT)))?;
+diff --git a/engine/hvf/vmm/src/memory.rs b/engine/hvf/vmm/src/memory.rs
+index 0ef6d58..4357cec 100644
+--- a/engine/hvf/vmm/src/memory.rs
++++ b/engine/hvf/vmm/src/memory.rs
+@@ -13,6 +13,10 @@ impl GuestMemory {
+         GuestMemory { region }
+     }
+ 
++    pub unsafe fn reclaim(&self, address: u64, len: usize) -> std::io::Result<usize> {
++        unsafe { self.region.reclaim(address, len) }
++    }
++
+     pub fn base(&self) -> u64 {
+         self.region.guest_address()
+     }
+diff --git a/engine/hvf/vmm/src/virtio/balloon.rs b/engine/hvf/vmm/src/virtio/balloon.rs
+new file mode 100644
+index 0000000..5e4bb23
+--- /dev/null
++++ b/engine/hvf/vmm/src/virtio/balloon.rs
+@@ -0,0 +1,229 @@
++//! GlidePod virtio balloon and free-page reporting. Only guest-surrendered RAM is replaced.
++use super::{Active, Interrupt, VirtioDevice, queue::Queue};
++use crate::memory::GuestMemory;
++use std::collections::BTreeMap;
++use std::sync::{
++    Arc, Mutex,
++    atomic::{AtomicU32, AtomicU64, Ordering},
++};
++
++static MEMORY: Mutex<Option<std::sync::Weak<GuestMemory>>> = Mutex::new(None);
++static TARGET: AtomicU32 = AtomicU32::new(0);
++static ACTUAL: AtomicU32 = AtomicU32::new(0);
++static RECLAIMED: AtomicU64 = AtomicU64::new(0);
++static FEATURES: AtomicU64 = AtomicU64::new(0);
++static SIGNAL: Mutex<Option<Interrupt>> = Mutex::new(None);
++pub fn target(pages: u32) -> Result<(), String> {
++    let signal = SIGNAL.lock().unwrap();
++    let signal = signal.as_ref().ok_or("balloon driver not active")?;
++    TARGET.store(pages, Ordering::Release);
++    signal.signal_config();
++    Ok(())
++}
++pub fn status() -> String {
++    format!(
++        "{{\"version\":1,\"active\":{},\"reporting\":{},\"target_mib\":{},\"actual_mib\":{},\"reclaimed_bytes\":{}}}",
++        SIGNAL.lock().unwrap().is_some(),
++        FEATURES.load(Ordering::Acquire) & (1 << 5) != 0,
++        TARGET.load(Ordering::Acquire) / 256,
++        ACTUAL.load(Ordering::Acquire) / 256,
++        RECLAIMED.load(Ordering::Acquire)
++    )
++}
++
++// On-demand diagnostic only. mincore inspects backing objects without faulting
++// their contents in; a shared guest/host page is visited once. PAGED_OUT is
++// uncompressed logical size, not the compressor's physical storage. Sampling
++// is concurrent with guest execution and excludes VMM and graphics allocations.
++pub fn residency() -> String {
++    let Some(memory) = MEMORY.lock().unwrap().as_ref().and_then(|m| m.upgrade()) else {
++        return "error balloon driver not active".into();
++    };
++    let len = memory.size() as usize;
++    let mut pages = vec![0i8; len / 16384];
++    let started = std::time::Instant::now();
++    if unsafe {
++        libc::mincore(
++            memory.host_ptr(memory.base(), len).unwrap().cast(),
++            len,
++            pages.as_mut_ptr(),
++        )
++    } != 0
++    {
++        return format!("error mincore {}", std::io::Error::last_os_error());
++    }
++    let resident = pages.iter().filter(|p| **p & 1 != 0).count() * 16384;
++    let paged_out = pages
++        .iter()
++        .filter(|p| **p & 1 == 0 && **p & 0x20 != 0)
++        .count()
++        * 16384;
++    format!(
++        "{{\"version\":1,\"capacity_bytes\":{},\"resident_bytes\":{},\"paged_out_bytes\":{},\"unbacked_bytes\":{},\"scan_ms\":{}}}",
++        len,
++        resident,
++        paged_out,
++        len - resident - paged_out,
++        started.elapsed().as_millis()
++    )
++}
++
++#[derive(Default)]
++pub struct Balloon {
++    active: Option<Active>,
++    // 4 KiB PFNs grouped into complete 64 KiB host extents; partial objects remain intact.
++    inflated: BTreeMap<u64, u16>,
++}
++impl VirtioDevice for Balloon {
++    fn device_type(&self) -> u16 {
++        5
++    }
++    fn features(&self) -> u64 {
++        (1 << 0) | (1 << 2) | (1 << 5)
++    }
++    fn queue_sizes(&self) -> Vec<u16> {
++        vec![128, 128, 128]
++    }
++    fn config(&self) -> Vec<u8> {
++        [
++            TARGET.load(Ordering::Acquire).to_le_bytes(),
++            ACTUAL.load(Ordering::Acquire).to_le_bytes(),
++        ]
++        .concat()
++    }
++    fn write_config(&mut self, offset: usize, data: &[u8]) {
++        if offset == 4 && data.len() == 4 {
++            ACTUAL.store(
++                u32::from_le_bytes(data.try_into().unwrap()),
++                Ordering::Release,
++            );
++        }
++    }
++    fn activate(
++        &mut self,
++        memory: Arc<GuestMemory>,
++        queues: Vec<Queue>,
++        interrupt: Interrupt,
++        features: u64,
++    ) {
++        self.inflated.clear();
++        *MEMORY.lock().unwrap() = Some(Arc::downgrade(&memory));
++        TARGET.store(0, Ordering::Release);
++        ACTUAL.store(0, Ordering::Release);
++        RECLAIMED.store(0, Ordering::Release);
++        FEATURES.store(features, Ordering::Release);
++        *SIGNAL.lock().unwrap() = Some(interrupt.clone());
++        self.active = Some(Active {
++            memory,
++            queues,
++            interrupt,
++        });
++    }
++    fn notify(&mut self, queue: usize) {
++        if !matches!(queue, 0 | 1 | 2) {
++            return;
++        }
++        let Some(active) = self.active.as_mut() else {
++            return;
++        };
++        for _ in 0..128 {
++            let Some(chain) = active.queues[queue].pop(&active.memory) else {
++                break;
++            };
++            if queue == 2 {
++                if FEATURES.load(Ordering::Acquire) & (1 << 5) != 0 {
++                    // Linux retains these free pages until completion. Never reclaim rounded-out ranges.
++                    for d in chain.writable() {
++                        if valid_report(
++                            active.memory.base(),
++                            active.memory.size(),
++                            d.address,
++                            d.len as u64,
++                        ) {
++                            if let Ok(bytes) =
++                                unsafe { active.memory.reclaim(d.address, d.len as usize) }
++                            {
++                                RECLAIMED.fetch_add(bytes as u64, Ordering::Relaxed);
++                            }
++                        }
++                    }
++                }
++            } else if chain.readable_len() <= 4096
++                && let Some(data) = chain.read_all(&active.memory)
++            {
++                if data.len() <= 4096 && data.len() % 4 == 0 {
++                    for raw in data.chunks_exact(4) {
++                        let address = u32::from_le_bytes(raw.try_into().unwrap()) as u64 * 4096;
++                        if active.memory.host_ptr(address, 4096).is_none() {
++                            continue;
++                        }
++                        let block = address & !(65536 - 1);
++                        let page = ((address - block) / 4096) as u16;
++                        if queue == 0 {
++                            let pages = self.inflated.entry(block).or_default();
++                            let was = *pages;
++                            *pages |= 1 << page;
++                            if was != u16::MAX && *pages == u16::MAX {
++                                if let Ok(bytes) = unsafe { active.memory.reclaim(block, 65536) } {
++                                    RECLAIMED.fetch_add(bytes as u64, Ordering::Relaxed);
++                                }
++                            }
++                        } else if let Some(pages) = self.inflated.get_mut(&block) {
++                            *pages &= !(1 << page);
++                            if *pages == 0 {
++                                self.inflated.remove(&block);
++                            }
++                        }
++                    }
++                }
++            }
++            // All host and stage-2 mappings are valid again before guest reuse.
++            active.complete(queue, chain.head, 0);
++        }
++    }
++    fn reset(&mut self) {
++        *SIGNAL.lock().unwrap() = None;
++        *MEMORY.lock().unwrap() = None;
++        TARGET.store(0, Ordering::Release);
++        ACTUAL.store(0, Ordering::Release);
++        FEATURES.store(0, Ordering::Release);
++        self.active = None;
++        self.inflated.clear();
++    }
++}
++fn valid_report(base: u64, size: u64, address: u64, len: u64) -> bool {
++    let block = 65536;
++    len > 0
++        && len <= 64 << 20
++        && address % block == 0
++        && len % block == 0
++        && address >= base
++        && address
++            .checked_add(len)
++            .is_some_and(|end| base.checked_add(size).is_some_and(|limit| end <= limit))
++}
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn reports_never_round_into_live_pages_or_escape_ram() {
++        assert!(valid_report(0x80000000, 4 << 30, 0x80010000, 65536));
++        assert!(!valid_report(
++            0x80000000,
++            4 << 30,
++            0x80000000,
++            (64 << 20) + 65536
++        ));
++        assert!(valid_report(0x80000000, 4 << 30, 0x80200000, 2 << 20));
++        assert!(!valid_report(0x80000000, 4 << 30, 0x80201000, 2 << 20));
++        assert!(!valid_report(0x80000000, 4 << 30, 0x80200000, 4096));
++        assert!(!valid_report(0x80000000, 4 << 30, 0x7fe00000, 2 << 20));
++        assert!(!valid_report(
++            0,
++            u64::MAX,
++            u64::MAX - ((2 << 20) - 1),
++            2 << 20
++        ));
++        assert!(!valid_report(0x80000000, 4 << 30, 0x80000000, 0));
++    }
++}
+diff --git a/engine/hvf/vmm/src/virtio/mod.rs b/engine/hvf/vmm/src/virtio/mod.rs
+index 6be7729..4d1445e 100644
+--- a/engine/hvf/vmm/src/virtio/mod.rs
++++ b/engine/hvf/vmm/src/virtio/mod.rs
+@@ -1,6 +1,7 @@
+ //! Virtio devices over the modern PCI transport (virtio 1.2 §4.1), with
+ //! legacy INTx interrupts routed to GIC SPIs.
+ 
++pub mod balloon;
+ pub mod block;
+ pub mod console;
+ pub mod fs;

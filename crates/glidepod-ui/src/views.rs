@@ -6,11 +6,7 @@ use gpui_component::TitleBar;
 // Keep the full runtime catalog available for widget/settings operations, while
 // every library view and its search/counts use only user-facing installed apps.
 fn is_library_app(app: &glidepod_runtime::guest::AndroidApp) -> bool {
-    (!app.system || app.package_id == "com.android.vending")
-        && !matches!(
-            app.package_id.as_str(),
-            "dev.glidepod.input" | "dev.glidepod.widgets" | "dev.glidepod.notifications"
-        )
+    app.in_library()
 }
 
 impl Center {
@@ -511,7 +507,7 @@ impl Center {
                         ),
                 )
                 .children(launcher.map(|app| {
-                    button("info-launcher", "Create Mac shortcut")
+                    button("info-launcher", "Show in Finder")
                         .disabled(self.working)
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.add_launcher(app.clone(), cx)),
@@ -527,6 +523,15 @@ impl Center {
                     )
                 }),
         );
+        let background_package = package.clone();
+        content = content.child(self.section("Background", self.group()
+            .child(self.row("Keep available for messages and background work", Switch::new("app-background")
+                .checked(self.config.background_apps.contains(&package))
+                .on_click(cx.listener(move |this, enabled, _, cx| {
+                    let package = background_package.clone();
+                    this.update_settings(|c| { c.background_apps.retain(|p| p != &package); if *enabled { c.background_apps.push(package); } }, cx);
+                }))))
+            .child(self.caption("Keeps the shared Android runtime online even when this app has no open window. Turning this off does not force-stop the app.").px(px(14.)).pb(px(12.)))));
         let mutable = ready
             && !d.system
             && !d.shared_uid
@@ -665,12 +670,36 @@ impl Center {
                 Button::new(("memory", m as usize))
                     .label(format!("{} GB", m / 1024))
                     .small()
-                    .segment(settings.memory_mib == m)
+                    .segment(
+                        settings.memory_mode == glidepod_core::MemoryMode::Manual
+                            && settings.memory_mib == m,
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.update_settings(|c| c.settings_mut().memory_mib = m, cx)
+                        this.update_settings(
+                            |c| {
+                                c.settings_mut().memory_mib = m;
+                                c.settings_mut().memory_mode = glidepod_core::MemoryMode::Manual;
+                            },
+                            cx,
+                        )
                     }))
             }),
         );
+        let memory = div()
+            .flex()
+            .gap(px(8.))
+            .items_center()
+            .child(
+                button("memory-auto", "Automatic")
+                    .segment(settings.memory_mode == glidepod_core::MemoryMode::Automatic)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.update_settings(
+                            |c| c.settings_mut().memory_mode = glidepod_core::MemoryMode::Automatic,
+                            cx,
+                        )
+                    })),
+            )
+            .child(memory);
         let cpus = segmented(self.config.dark_mode).children([2, 4, 6, 8].into_iter().map(|n| {
             Button::new(("cpus", n as usize))
                 .label(n.to_string())
@@ -739,6 +768,7 @@ impl Center {
             .child(self.row("Profile", profiles))
             .child(self.divider())
             .child(self.row("Memory", memory))
+            .child(self.caption("Automatic returns unused memory to your Mac and keeps room for Android services. The memory ceiling applies at the next start. An updated runtime is required.").px(px(14.)).pb(px(12.)))
             .child(self.divider())
             .child(self.row("Processors", cpus));
         div()
@@ -840,6 +870,85 @@ impl Center {
                     }))
             }),
         );
+        let refresh_rates = segmented(self.config.dark_mode).children(
+            [60, 90, 120].into_iter().enumerate().map(|(i, hz)| {
+                Button::new(("refresh-rate", i))
+                    .label(format!("{hz} Hz"))
+                    .small()
+                    .segment(self.config.settings().refresh_rate_hz == hz)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_settings(|c| c.settings_mut().refresh_rate_hz = hz, cx)
+                    }))
+            }),
+        );
+        let live_refresh_rate = self
+            .runtime
+            .resources
+            .as_ref()
+            .filter(|_| matches!(self.runtime.vm, VmState::Running { .. }))
+            .map(|r| format!("{} Hz", r.refresh_rate_hz))
+            .unwrap_or_else(|| "Not running".into());
+        let driver_rows = [
+            glidepod_runtime::gpu::VulkanDriver::MoltenVk,
+            glidepod_runtime::gpu::VulkanDriver::KosmicKrisp,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, driver)| {
+            let registered = self.gpus.renderers.iter().any(|r| r.driver == driver);
+            let selected = self.gpus.selected_driver == Some(driver);
+            div().when(i > 0, |d| d.child(self.divider())).child(
+                self.row(
+                    driver.label(),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(self.caption(if registered {
+                            "Registered"
+                        } else {
+                            "Not registered"
+                        }))
+                        .child(
+                            Button::new(("gpu-select", i))
+                                .label(if selected { "Selected" } else { "Use" })
+                                .small()
+                                .segment(selected)
+                                .disabled(
+                                    self.working
+                                        || self.runtime.active()
+                                        || !registered
+                                        || selected,
+                                )
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.select_gpu(driver, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new(("gpu-register", i))
+                                .label("Register…")
+                                .small()
+                                .ghost()
+                                .disabled(
+                                    self.working || self.picking_file || self.runtime.active(),
+                                )
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.choose_gpu(driver, cx)),
+                                ),
+                        ),
+                ),
+            )
+        });
+        let current_driver = if !matches!(self.runtime.vm, VmState::Running { .. }) {
+            "Not running"
+        } else if self.runtime.effective_renderer == Some(Renderer::Software) {
+            "Software · SwiftShader"
+        } else {
+            self.runtime
+                .vulkan_driver
+                .map(|d| d.label())
+                .unwrap_or("Metal · driver not reported")
+        };
         let results = self.probes.as_ref().map(|report| {
             let rows = report.probes.iter().enumerate().map(|(i, result)| {
                 div()
@@ -889,6 +998,18 @@ impl Center {
         });
         div().w_full()
             .child(self.section("This Mac", host)).children(results)
+            .child(self.section("Android rendering", self.group().child(self.row("Preference", renderers))))
+            .child(self.section("Refresh rate", self.group()
+                .child(self.row("Currently using", self.caption(live_refresh_rate)))
+                .child(self.divider())
+                .child(self.row("Next start", refresh_rates))))
+            .child(self.caption("Restart Android to apply. Actual frame rate depends on the app and your Mac display.").mt(px(-12.)))
+            .child(self.section("Vulkan driver", self.group()
+                .child(self.row("Currently using", self.caption(current_driver)))
+                .child(self.divider())
+                .child(self.row("Next Metal start", self.caption(self.gpus.selected_driver.map(|d| d.label()).unwrap_or("Register a driver"))))
+                .child(self.divider()).children(driver_rows)))
+            .child(self.caption("Stop Android to switch drivers. KosmicKrisp requires Apple Silicon and macOS 26+. Automatic uses Software; driver selection applies to Metal.").mt(px(-12.)))
             .child(self.section("Android 3D check",self.group()
                 .child(self.row("Textured 3D · 720 × 1080",div().flex().gap(px(8.))
                     .child(button("benchmark-3d","Run 3D Check").disabled(self.working || !matches!(self.runtime.vm,VmState::Running{..})).on_click(cx.listener(|this,_,_,cx|this.run_benchmark(glidepod_runtime::benchmark::GraphicsApi::Gles,2,cx))))
@@ -899,13 +1020,86 @@ impl Center {
                     .child(self.caption(format!("{} objects · {} samples · {} × {}",r.request.objects,r.request.samples,r.request.width,r.request.height)))
                     .child(self.caption(if r.request.api == glidepod_runtime::benchmark::GraphicsApi::Vulkan {"Vulkan pixels, compute, synchronization and presentation checks passed."} else if r.guest["gles3_probe"]["correctness"]["passed"] == true {"GLES 3 pixel and readback checks passed."} else if r.guest["gles3_probe"]["context_created"] == true {"GLES 3 is available; correctness checks have not passed."} else {"GLES 3 is unavailable on this renderer."}))
                     .child(self.caption("App rendering and copied frames only; Mac display smoothness and game compatibility are not measured."))))))
-            .child(self.section("Experimental GPU",self.group().child(self.row("External renderer",button("register-gpu","Register Renderer…").disabled(self.working || self.runtime.active()).on_click(cx.listener(|this,_,_,cx|this.choose_gpu(cx)))))))
-            .child(self.section("Android rendering", self.group().child(self.row("Preference", renderers))))
-            .child(self.caption("Automatic uses Software. Metal requires a registered external renderer and applies on restart. Check GLES 3 and Vulkan independently; game compatibility is pending.").mt(px(-12.)))
+            .child(self.caption("Check GLES 3 and Vulkan independently; game compatibility is pending.").mt(px(-12.)))
             .into_any_element()
     }
 
     fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let location_source = segmented(self.config.dark_mode).children(
+            [
+                (glidepod_runtime::location::Source::Off, "Off"),
+                (glidepod_runtime::location::Source::Host, "Follow Mac"),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (source, label))| {
+                Button::new(("location-source", i))
+                    .label(label)
+                    .small()
+                    .segment(self.config.location.source == source)
+                    .disabled(self.working)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_settings(|c| c.location.source = source, cx)
+                    }))
+            }),
+        );
+        let network_modes = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(8.))
+            .child(
+                button("network-shared", "Shared with Mac")
+                    .segment(self.config.network.mode == glidepod_runtime::network::Mode::Shared)
+                    .disabled(self.working)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.update_settings(
+                            |c| c.network.mode = glidepod_runtime::network::Mode::Shared,
+                            cx,
+                        )
+                    })),
+            )
+            .children(
+                self.bridge_interfaces
+                    .iter()
+                    .enumerate()
+                    .map(|(i, interface)| {
+                        let name = interface.clone();
+                        Button::new(("network-bridge", i))
+                            .label(format!("Bridge · {interface}"))
+                            .segment(
+                                self.config.network.mode
+                                    == glidepod_runtime::network::Mode::Bridged
+                                    && self.config.network.interface.as_ref() == Some(interface),
+                            )
+                            .disabled(self.working)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.update_settings(
+                                    |c| {
+                                        c.network.mode = glidepod_runtime::network::Mode::Bridged;
+                                        c.network.interface = Some(name.clone());
+                                    },
+                                    cx,
+                                )
+                            }))
+                    }),
+            );
+        let runtime_modes = segmented(self.config.dark_mode).children(
+            [
+                (glidepod_core::RuntimeMode::Automatic, "Smart start / stop"),
+                (glidepod_core::RuntimeMode::Resident, "Always on"),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (mode, label))| {
+                Button::new(("runtime-mode", i))
+                    .label(label)
+                    .small()
+                    .segment(self.config.runtime_mode == mode)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_settings(|c| c.runtime_mode = mode, cx)
+                    }))
+            }),
+        );
         let appearance = segmented(self.config.dark_mode).children(
             [(false, "Light"), (true, "Dark")]
                 .into_iter()
@@ -955,14 +1149,56 @@ impl Center {
             .w_full()
 
             .child(self.section("General", general))
-            .child(self.section("Google services",self.group()
-                .child(self.row("Google Play services",self.caption(if self.google_installed {"Installed · sign-in available"} else {"Optional"})))
-                .child(self.caption("For the Android 17 ARM64 Developer profile. Downloads 519 MiB from MindTheGapps. Android stops while a recoverable copy is prepared. Google account sign-in and device compatibility depend on Google.").px(px(14.)).pb(px(12.)))
+            .child(self.section("Location", self.group()
+                .child(self.row("Source", location_source))
+                .child(self.caption(if self.config.location.source == glidepod_runtime::location::Source::Virtual { "Virtual location selected." } else { "Follow Mac requests macOS location permission. Android apps still need their own location permission." }).px(px(14.)).pb(px(8.)))
                 .child(div().flex().gap(px(8.)).px(px(14.)).pb(px(12.))
+                    .child(Input::new(&self.location_latitude).w(px(180.)))
+                    .child(Input::new(&self.location_longitude).w(px(180.)))
+                    .child(button("location-virtual", "Use virtual location").disabled(self.working)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let point = (|| -> anyhow::Result<glidepod_runtime::location::Point> {
+                                let point = glidepod_runtime::location::Point {
+                                    latitude: this.location_latitude.read(cx).value().trim().parse().map_err(|_| anyhow::anyhow!("Enter a valid latitude"))?,
+                                    longitude: this.location_longitude.read(cx).value().trim().parse().map_err(|_| anyhow::anyhow!("Enter a valid longitude"))?,
+                                    altitude: 0.0, accuracy: 10.0,
+                                }; point.validate()?; Ok(point)
+                            })();
+                            match point {
+                                Ok(point) => this.update_settings(|c| { c.location.source = glidepod_runtime::location::Source::Virtual; c.location.point = Some(point); }, cx),
+                                Err(e) => { this.notice = Some(e.to_string()); cx.notify(); }
+                            }
+                        }))))
+                .child(self.caption(self.location_message.clone()).px(px(14.)).pb(px(12.)))))
+            .child(self.section("Network", self.group()
+                .child(self.row("Next Android start", network_modes))
+                .child(self.caption(if let Some(network) = self.runtime.effective_network.as_ref().filter(|_| matches!(self.runtime.vm, VmState::Running { .. })) {
+                    format!("Active: {}", if network.mode == glidepod_runtime::network::Mode::Shared { "Shared with Mac".into() } else { format!("Bridged through {}", network.interface.as_deref().unwrap_or("—")) })
+                } else { "Android is stopped. The selected network applies on start.".into() }).px(px(14.)).pb(px(8.)))
+                .when(!self.network_message.is_empty(), |d| d.child(self.caption(self.network_message.clone()).px(px(14.)).pb(px(8.))))
+                .child(self.caption("Shared uses the Mac’s network routes. Bridged gives Android its own LAN connection and requires an updated runtime with macOS virtual-network authorization. System HTTP/SOCKS proxy settings are separate; a failed bridge never switches to Shared automatically.").px(px(14.)).pb(px(12.)))
+                .when(self.bridge_interfaces.is_empty(), |d| d.child(self.caption("No bridge-capable interface is currently available.").px(px(14.)).pb(px(12.))))))
+            .child(self.section("Background runtime", self.group()
+                .child(self.row("Android", runtime_modes))
+                .child(self.caption(cx.global::<AppSession>().notifications.runtime.lock().unwrap().clone()).px(px(14.)).pb(px(12.)))
+                .child(self.caption("Smart mode stops Android after three idle minutes when no app needs it. Notifications, enabled Google services, background apps, playback and downloads keep it online. Always on keeps Android running after every window closes. Stop Android overrides either mode until the next app launch.").px(px(14.)).pb(px(12.)))))
+            .child(self.section("Built-in Android apps", self.group()
+                .child(self.row("Minimal built-in apps", Switch::new("minimal-builtin-apps")
+                    .checked(self.config.minimal_builtin_apps).disabled(self.working)
+                    .on_click(cx.listener(|this,_,_,cx| { let minimal = !this.config.minimal_builtin_apps; this.update_settings(|c| c.minimal_builtin_apps = minimal, cx); }))))
+                .child(self.caption("Turns off Clock, Contacts, Phone, Messages, Calendar, Music and demo or diagnostic apps. App data is kept. Turn this off to restore their previous states. Applies at the next Android start.").px(px(14.)).pb(px(12.)))))
+            .child(self.section("Google services",self.group()
+                .child(self.row("Google Play services",self.caption(if self.google_enabled {"On · sign-in available"} else if self.google_installed {"Off · data preserved"} else {"Not installed · optional"})))
+                .child(self.caption("For the Android 17 ARM64 Developer profile. Downloads 519 MiB from MindTheGapps. Android stops while a recoverable copy is prepared. Google account sign-in and device compatibility depend on Google.").px(px(14.)).pb(px(12.)))
+                .child(self.caption("Turn off Google services to stop Google background activity and push delivery while keeping account and app data. Turn them on again when needed, or remove them and reinstall later.").px(px(14.)).pb(px(12.)))
+                .child(div().flex().flex_wrap().gap(px(8.)).px(px(14.)).pb(px(12.))
+                    .when(self.google_installed,|d| d.child(button("google-toggle", if self.google_enabled {"Turn off Google services"} else {"Turn on Google services"})
+                        .disabled(self.working || self.google_recovery || self.config.active_profile!=ProfileId::Developer || !self.runtime.configured)
+                        .on_click(cx.listener(|this,_,w,cx|this.manage_google(Some(if this.google_enabled {glidepod_runtime::google_apps::Action::Disable} else {glidepod_runtime::google_apps::Action::Enable}),w,cx)))))
                     .child(button("google-install",if self.google_installed{"Remove Google services…"}else{"Install Google services"})
                         .disabled(self.working || self.google_recovery || self.config.active_profile!=ProfileId::Developer || !self.runtime.configured)
                         .on_click(cx.listener(|this,_,w,cx|this.manage_google(Some(if this.google_installed{glidepod_runtime::google_apps::Action::Remove}else{glidepod_runtime::google_apps::Action::Install}),w,cx))))
-                    .when(self.google_installed,|d|d.child(button("google-open-store","Open Play Store").disabled(self.working || self.config.active_profile!=ProfileId::Developer).on_click(cx.listener(|this,_,_,cx|{
+                    .when(self.google_enabled,|d|d.child(button("google-open-store","Open Play Store").disabled(self.working || self.config.active_profile!=ProfileId::Developer).on_click(cx.listener(|this,_,_,cx|{
                         if matches!(this.runtime.vm,VmState::Running{..}) {this.open_app("com.android.vending".into(),cx);}else{this.pending_launch=Some("com.android.vending".into());this.start_android(cx);}
                     }))))
                     .when(self.google_recovery,|d|d.child(button("google-recover","Recover Android").disabled(self.working).on_click(cx.listener(|this,_,w,cx|this.manage_google(None,w,cx)))))
@@ -1302,6 +1538,10 @@ impl Render for Center {
             .text_color(rgb(p.text))
             .bg(rgb(p.bg))
             .on_action(cx.listener(Self::choose_apk))
+            .on_action(cx.listener(|this, _: &ShowSettings, _, cx| {
+                this.page = Page::Settings;
+                cx.notify();
+            }))
             .on_action(cx.listener(Self::focus_search))
             .on_action(cx.listener(Self::clear_search))
             .on_action(cx.listener(Self::refresh))

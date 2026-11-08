@@ -686,6 +686,7 @@ impl ExportWorker {
         std::thread::spawn(move || {
             let mut exporter = None;
             let mut recent = Vec::<PathBuf>::new();
+            let mut published = None;
             while !stop.load(Ordering::Acquire) {
                 let result = (|| -> Result<()> {
                     guest.verify_epoch()?;
@@ -709,7 +710,14 @@ impl ExportWorker {
                         .and_then(|b| serde_json::from_slice(&b).ok())
                         .unwrap_or_default();
                 let status = json!({"epoch":guest.endpoints.epoch,"recent":recent,"error":result.err().map(|e|e.to_string()).or_else(||pending_errors.first().cloned())});
-                let _ = atomic_json(&guest.store.root().join("file-export-status.json"), &status);
+                // Status is a snapshot, not a heartbeat. Avoid an fsync and rename
+                // every idle cycle; retain retries if a changed snapshot cannot be saved.
+                if published.as_ref() != Some(&status)
+                    && atomic_json(&guest.store.root().join("file-export-status.json"), &status)
+                        .is_ok()
+                {
+                    published = Some(status);
+                }
                 for _ in 0..30 {
                     if stop.load(Ordering::Acquire) {
                         return;
@@ -1247,8 +1255,12 @@ mod tests {
             !path.exists(),
             "Automatic exporter recreated a deleted copy"
         );
+        let evidence = std::env::var_os("GLIDEPOD_TEST_EVIDENCE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("evidence/host-files-2026-11-07"));
+        fs::create_dir_all(&evidence)?;
         atomic_json(
-            &root.join("evidence/host-files-2026-11-07/automatic-export.json"),
+            &evidence.join("automatic-export.json"),
             &json!({"passed":true,"epoch":guest.endpoints.epoch,"supervisor_owned":true,"default_downloads":true,"idempotent_after_deletion":true,"shared_mount":false}),
         )?;
         Ok(())
@@ -1519,7 +1531,9 @@ mod tests {
             fs::read_to_string(&destination)? == "Recovered",
             "Recovered export changed content"
         );
-        let out = root.join("evidence/host-files-review-2026-11-07");
+        let out = std::env::var_os("GLIDEPOD_TEST_EVIDENCE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("evidence/host-files-review-2026-11-07"));
         fs::create_dir_all(&out)?;
         atomic_json(
             &out.join("failure-recovery.json"),
@@ -1528,7 +1542,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    #[ignore = "requires a disposable running GLIDEPOD_TEST_STORE"]
+    #[ignore = "requires a disposable running GLIDEPOD_TEST_STORE without the automatic exporter"]
     fn real_file_bridge_contracts() -> Result<()> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -1820,7 +1834,9 @@ mod tests {
             shared.len() == 1 && digest(&shared[0])? == private["sha256"],
             "Private attachment Share export mismatch"
         );
-        let evidence = root.join("evidence/host-files-2026-11-07");
+        let evidence = std::env::var_os("GLIDEPOD_TEST_EVIDENCE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("evidence/host-files-2026-11-07"));
         fs::create_dir_all(&evidence)?;
         atomic_json(
             &evidence.join("guest-contracts.json"),

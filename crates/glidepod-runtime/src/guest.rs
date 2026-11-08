@@ -16,7 +16,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Endpoints {
     pub epoch: u64,
     pub vsock: PathBuf,
@@ -37,6 +37,21 @@ pub struct AndroidApp {
     #[serde(default)]
     pub icon_path: Option<PathBuf>,
 }
+impl AndroidApp {
+    /// One shared policy for the library and automatic macOS app entries.
+    pub fn in_library(&self) -> bool {
+        (!self.system || self.package_id == "com.android.vending")
+            && !matches!(
+                self.package_id.as_str(),
+                "dev.glidepod.input" | "dev.glidepod.widgets" | "dev.glidepod.notifications"
+            )
+    }
+}
+
+pub struct DesktopCatalog {
+    pub apps: Vec<AndroidApp>,
+    pub launchers: glidepod_macos::launchers::SyncReport,
+}
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InstallReceipt {
     pub package_id: String,
@@ -56,6 +71,10 @@ pub fn resource(name: &str) -> Result<PathBuf> {
         exe.parent()
             .and_then(Path::parent)
             .map(|p| p.join("Resources/android")),
+        exe.ancestors()
+            .filter(|p| p.extension().is_some_and(|e| e == "app"))
+            .last()
+            .map(|p| p.join("Contents/Resources/android")),
         Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/android")),
     ];
     paths
@@ -68,6 +87,22 @@ pub fn resource(name: &str) -> Result<PathBuf> {
         })
 }
 impl Store {
+    pub fn sync_mac_apps(
+        &self,
+        apps: &[AndroidApp],
+        prune: bool,
+    ) -> Result<glidepod_macos::launchers::SyncReport> {
+        let entries = apps
+            .iter()
+            .map(|a| glidepod_macos::launchers::AppEntry {
+                package: &a.package_id,
+                label: &a.label,
+                icon: a.icon_path.as_deref(),
+                in_library: a.in_library(),
+            })
+            .collect::<Vec<_>>();
+        glidepod_macos::launchers::synchronize(&entries, self.root(), prune)
+    }
     pub fn guest(&self) -> Result<Guest> {
         let status = self.runtime_status()?;
         let VmState::Running { epoch } = status.vm else {
@@ -95,7 +130,20 @@ impl Store {
             file.metadata()?.len() <= 8 * 1024 * 1024,
             "App catalog exceeds limit"
         );
-        Ok(serde_json::from_reader(file)?)
+        let mut apps: Vec<AndroidApp> = serde_json::from_reader(file)?;
+        if self.google_apps_installation()?.is_some_and(|i| !i.enabled) {
+            apps.retain(|app| app.package_id != "com.android.vending");
+        }
+        Ok(apps)
+    }
+    pub(crate) fn forget_cached_play_store(&self) -> Result<()> {
+        let path = self.root().join("developer/apps.json");
+        if path.exists() {
+            let mut apps = self.cached_apps()?;
+            apps.retain(|app| app.package_id != "com.android.vending");
+            crate::experimental::atomic_json(&path, &apps)?;
+        }
+        Ok(())
     }
 }
 #[derive(Clone)]
@@ -110,6 +158,11 @@ impl Guest {
         method: &str,
         arg: Option<&str>,
     ) -> Result<String> {
+        // Only these fixed, read-only observations use the persistent channel.
+        // Mutations retain their existing one-shot execution and are never replayed.
+        if let Some(operation) = crate::provider_poll::operation(authority, method, arg) {
+            return crate::provider_poll::query(self, operation);
+        }
         let result = self.shell(&format!(
             "content call --uri {} --method {} {}",
             quote(&format!("content://{authority}")),
@@ -140,6 +193,32 @@ impl Guest {
         timeout: Duration,
     ) -> Result<String> {
         self.verify_epoch()?;
+        let remote = self.prepare_bridge()?;
+        // DownloadManager's all_downloads permission is signature-only. The
+        // Developer image uses root for download inventory/activity. Google
+        // enable/disable calls run only in a recoverable maintenance candidate.
+        let identity = if class == "dev.glidepod.bridge.Background"
+            || (class == "dev.glidepod.bridge.GoogleServices" && !args.is_empty())
+            || (class == "dev.glidepod.bridge.Files"
+                && args
+                    .first()
+                    .is_some_and(|a| ["downloads", "download"].contains(a)))
+        {
+            "su 0 env "
+        } else {
+            ""
+        };
+        self.shell_timeout(
+            &format!(
+                "{identity}CLASSPATH={} app_process / {} {}",
+                quote(&remote),
+                quote(class),
+                args.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ")
+            ),
+            timeout,
+        )
+    }
+    pub(crate) fn prepare_bridge(&self) -> Result<String> {
         let path = resource("glidepod-bridge.jar")?;
         // Content-addressed paths avoid replacing a JAR while another helper is reading it.
         let hash = crate::experimental::digest(&path)?;
@@ -159,28 +238,7 @@ impl Guest {
             Adb::push(&self.endpoints.vsock, &path, &remote)?;
             fs::write(marker, value)?;
         }
-        drop(lock);
-        // DownloadManager's all_downloads permission is signature-only. The
-        // Developer image's internal service uses root only for these two
-        // read-only, public-download-filtered operations, never for app writes.
-        let identity = if class == "dev.glidepod.bridge.Files"
-            && args
-                .first()
-                .is_some_and(|a| ["downloads", "download"].contains(a))
-        {
-            "su 0 env "
-        } else {
-            ""
-        };
-        self.shell_timeout(
-            &format!(
-                "{identity}CLASSPATH={} app_process / {} {}",
-                quote(&remote),
-                quote(class),
-                args.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ")
-            ),
-            timeout,
-        )
+        Ok(remote)
     }
     pub(crate) fn prepare_input(&self) -> Result<()> {
         let lock = OpenOptions::new()
@@ -294,6 +352,25 @@ impl Guest {
         file.as_file().sync_all()?;
         file.persist(self.store.root().join("developer/apps.json"))?;
         Ok(apps)
+    }
+    pub fn desktop_catalog(&self) -> Result<DesktopCatalog> {
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(self.store.root().join("desktop-catalog.lock"))?;
+        lock.lock_exclusive()?;
+        // A failed/partial guest query must never prune existing Mac entries.
+        let apps = self.catalog()?;
+        let launchers = self.store.sync_mac_apps(&apps, true).unwrap_or_else(|e| {
+            glidepod_macos::launchers::SyncReport {
+                warnings: vec![format!("{e:#}")],
+                ..Default::default()
+            }
+        });
+        Ok(DesktopCatalog { apps, launchers })
     }
     pub fn install(&self, source: &Path, reviewed_sha256: Option<&str>) -> Result<InstallReceipt> {
         self.verify_epoch()?;

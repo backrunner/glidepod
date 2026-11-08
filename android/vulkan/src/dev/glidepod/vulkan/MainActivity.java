@@ -12,12 +12,12 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private static native long createJob();
     private static native void cancelJob(long job);
     private static native void destroyJob(long job);
-    private static native String execute(long job, Surface surface, int objects, int samples, boolean validation, boolean negative, boolean recreate, boolean stages);
+    private static native String execute(long job, Surface surface, int objects, int samples, boolean validation, boolean negative, boolean recreate, boolean stages, int stressSeconds, int width, int height);
     private final Object lock = new Object();
     private long job;
     private boolean started;
     private String run;
-    private int objects, samples;
+    private int objects, samples, stressSeconds;
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -29,7 +29,8 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         }
         objects = getIntent().getIntExtra("objects",16);
         samples = getIntent().getIntExtra("samples",180);
-        if (!run.matches("[a-f0-9]{16,64}") || objects<1 || objects>64 || samples<60 || samples>3600)
+        stressSeconds = getIntent().getIntExtra("stress_seconds",0);
+        if (!run.matches("[a-f0-9]{16,64}") || stressSeconds<0 || stressSeconds>120 || objects<1 || objects>(stressSeconds>0?4096:64) || samples<60 || samples>3600)
             throw new IllegalArgumentException("Invalid Vulkan workload parameters");
         Results.json = "{\"ready\":false}";
         SurfaceView view = new SurfaceView(this);
@@ -46,7 +47,8 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
             try {
                 JSONObject result = new JSONObject(execute(id,holder.getSurface(),objects,samples,
                     getIntent().getBooleanExtra("validation",false),getIntent().getBooleanExtra("negative",false),
-                    getIntent().getBooleanExtra("recreate",true),getIntent().getBooleanExtra("stages",false)));
+                    getIntent().getBooleanExtra("recreate",true),getIntent().getBooleanExtra("stages",false),
+                    stressSeconds,width,height));
                 result.put("run",run).put("ready",true);
                 Results.json = result.toString();
             } catch (Exception e) {

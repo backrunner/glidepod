@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import <UserNotifications/UserNotifications.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,19 @@ static void enqueue(NSDictionary *event) {
 @end
 static GPNotificationDelegate *delegate;
 static UNUserNotificationCenter *center;
+void glidepod_background_open(const char *bundle, const char *store) {
+    NSString *path = [NSString stringWithUTF8String:bundle];
+    NSString *data = [NSString stringWithUTF8String:store];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+        configuration.environment = @{@"GLIDEPOD_DATA_DIR": data};
+        [NSWorkspace.sharedWorkspace openApplicationAtURL:[NSURL fileURLWithPath:path]
+            configuration:configuration completionHandler:^(NSRunningApplication *app, NSError *error) {
+                (void)app;
+                if (error) NSLog(@"GlidePod cannot open its interface: %@", error.localizedDescription);
+            }];
+    });
+}
 static void initialize(void) {
     static dispatch_once_t once;
     dispatch_once(&once,^{
@@ -69,3 +83,15 @@ char *glidepod_notifications(const char *json) {
     }}
 }
 void glidepod_notifications_free(char *value){free(value);}
+void glidepod_background_run(void (*tick)(void)) {
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        NSTimer *timer = [NSTimer timerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) { (void)t; tick(); }];
+        [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
+        [NSApp run];
+    }
+}
+void glidepod_background_stop(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
+}

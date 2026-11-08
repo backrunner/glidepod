@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "repository": "https://chromium.googlesource.com/angle/angle.git",
+  "revision": "4d61277d5827d69d01934ef9930e935a34d07a19",
+  "depot_tools_repository": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
+  "depot_tools_revision": "289a37bda3d848cfe16e6c1c599741ed3890ab55",
+  "gn_args": "is_debug = false\nis_component_build = false\nangle_enable_gl = false\nangle_enable_vulkan = false\nangle_enable_metal = true\nangle_enable_null = false\nangle_build_tests = false\nangle_enable_wgpu = false\nuse_custom_libcxx = true\nsymbol_level = 1\nuse_remoteexec = false\nuse_siso = false\nenable_rust = false\nenable_rust_cxx = false\nangle_ir = false\n",
+  "gles_version": "3.0",
+  "automatic_default": false,
+  "patches": [
+    {
+      "path": "engine/patches/angle-metal-indexed-fan.patch",
+      "sha256": "97fc4d002c38b56720c7e449f25da10e0a62422c4db1e0f724e4fddec623e2d0"
+    },
+    {
+      "path": "engine/patches/angle-metal-command-serials.patch",
+      "sha256": "9fb42602b0244dc46c7fa5b4d97e3eea8c927e4b2cf22097f127565e889b8c42"
+    },
+    {
+      "path": "engine/patches/angle-metal-readback-strips.patch",
+      "sha256": "857d1106c10eb65e4450b9a9d77cf72f9ba2077c532a184161f3917d264fec1d"
+    }
+  ],
+  "gfxstream": {
+    "repository": "https://android.googlesource.com/platform/hardware/google/gfxstream",
+    "revision": "ec3143b4ac345af198b3f5690bfc79c728128704",
+    "patch": "engine/patches/gfxstream-metal-native-image.patch",
+    "patch_sha256": "ec463c07566a7fce5fb6a9d6dd53f397b62164f9511bf43dad3aef9dc7be8a74",
+    "cmake_args": [
+      "-G",
+      "Ninja",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCMAKE_OSX_ARCHITECTURES=arm64",
+      "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0",
+      "-DBUILD_STANDALONE=ON",
+      "-DDEPENDENCY_RESOLUTION=AOSP",
+      "-DCMAKE_CXX_FLAGS=-Wno-error=deprecated-declarations",
+      "-DCMAKE_OBJCXX_FLAGS=-Wno-error=deprecated-declarations"
+    ]
+  }
+}

@@ -78,6 +78,9 @@ final class Gles3Checks {
             clear();vao();int p=program("#version 300 es\nout float captured;void main(){captured=float(gl_VertexID)*3.0+1.0;gl_Position=vec4(0,0,0,1);gl_PointSize=1.0;}","#version 300 es\nprecision highp float;out vec4 pixel;void main(){pixel=vec4(1);}",new String[]{"captured"});GLES30.glUseProgram(p);int b=buffer(GLES30.GL_TRANSFORM_FEEDBACK_BUFFER,null,12);GLES30.glBindBufferBase(GLES30.GL_TRANSFORM_FEEDBACK_BUFFER,0,b);GLES30.glEnable(GLES30.GL_RASTERIZER_DISCARD);GLES30.glBeginTransformFeedback(GLES30.GL_POINTS);GLES30.glDrawArrays(GLES30.GL_POINTS,0,3);GLES30.glEndTransformFeedback();GLES30.glDisable(GLES30.GL_RASTERIZER_DISCARD);
             Buffer mapped=GLES30.glMapBufferRange(GLES30.GL_TRANSFORM_FEEDBACK_BUFFER,0,12,GLES30.GL_MAP_READ_BIT);if(!(mapped instanceof ByteBuffer))throw new IllegalStateException("Missing mapped feedback");FloatBuffer data=((ByteBuffer)mapped).order(ByteOrder.nativeOrder()).asFloatBuffer();for(int i=0;i<3;i++)if(Math.abs(data.get(i)-(i*3+1))>.001)throw new IllegalStateException("Incorrect transform feedback");if(!GLES30.glUnmapBuffer(GLES30.GL_TRANSFORM_FEEDBACK_BUFFER))throw new IllegalStateException("Feedback buffer became invalid");
         });
-        return new JSONObject().put("passed",passed).put("checks",checks);
+        JSONObject topology=new JSONObject(Stress.nativeTopology());
+        passed &= topology.getBoolean("passed");
+        checks.put(new JSONObject().put("name","indexed-topology-matrix").put("passed",topology.getBoolean("passed")));
+        return new JSONObject().put("passed",passed).put("checks",checks).put("indexed_topology",topology);
     }
 }

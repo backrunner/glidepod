@@ -62,6 +62,16 @@ def vulkan_native(out):
         'ndk_archive_sha1':'c060be96767eefbb8e0a27796d6f43115fc1a0c4'},indent=2)+'\n')
     return library
 
+def gles_stress_native(out):
+    ndk = TOOLS / 'ndk/android-ndk-r30'
+    if '30.0.16248370' not in (ndk / 'source.properties').read_text():
+        raise RuntimeError('Unexpected Android NDK revision')
+    compiler = ndk / 'toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android29-clang++'
+    library = out / 'libglidepod_gles_stress.so'
+    run(compiler, '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror', '-fPIC', '-shared', '-static-libstdc++',
+        ROOT / 'android/benchmark/native/stress_jni.cpp', '-lGLESv3', '-Wl,-z,max-page-size=16384', '-o', library)
+    return library
+
 def apk(name, filename, package=None):
     out, dex = java(name)
     unsigned = out / 'unsigned.apk'
@@ -78,6 +88,11 @@ def apk(name, filename, package=None):
     run(BUILD / 'aapt2', 'link', '-I', ANDROID, '--manifest', manifest, '-o', unsigned, *compiled)
     with zipfile.ZipFile(unsigned, 'a', zipfile.ZIP_DEFLATED) as archive:
         archive.write(dex / 'classes.dex', 'classes.dex')
+        if name == 'benchmark':
+            archive.write(gles_stress_native(out), 'lib/arm64-v8a/libglidepod_gles_stress.so')
+            ndk = TOOLS / 'ndk/android-ndk-r30'
+            archive.write(ndk / 'toolchains/llvm/prebuilt/darwin-x86_64/NOTICE', 'assets/licenses/LLVM-runtime.txt')
+            archive.write(ndk / 'toolchains/llvm/prebuilt/darwin-x86_64/sysroot/NOTICE', 'assets/licenses/Android-runtime.txt')
         if name == 'vulkan':
             archive.write(vulkan_native(out), 'lib/arm64-v8a/libglidepod_vulkan.so')
             # Optional Khronos layer for diagnosis; never enabled in performance runs.

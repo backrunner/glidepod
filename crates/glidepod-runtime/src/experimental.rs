@@ -145,7 +145,11 @@ pub struct RuntimeStatus {
     pub profile: Option<ProfileId>,
     pub effective_root: bool,
     pub effective_renderer: Option<Renderer>,
+    #[serde(default)]
+    pub vulkan_driver: Option<crate::gpu::VulkanDriver>,
     pub resources: Option<ProfileSettings>,
+    #[serde(default)]
+    pub effective_network: Option<crate::network::Configuration>,
     pub fingerprint: Option<String>,
     pub engine_pid: Option<u32>,
     #[serde(default)]
@@ -180,7 +184,9 @@ impl RuntimeStatus {
             profile: None,
             effective_root: false,
             effective_renderer: None,
+            vulkan_driver: None,
             resources: None,
+            effective_network: None,
             fingerprint: None,
             engine_pid: None,
             endpoints: None,
@@ -486,7 +492,9 @@ fn worker_inner(
     let runtime = store
         .experimental_runtime()?
         .context("No experimental runtime registered")?;
-    let settings = config.settings().clone();
+    let mut settings = config.settings().clone();
+    settings.memory_mib =
+        crate::memory::boot_memory(&settings, glidepod_macos::physical_memory_mib());
     let epoch = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
     let mut lifecycle = Lifecycle::new(true);
     let generation = lifecycle.request_start()?;
@@ -545,10 +553,18 @@ fn worker_inner(
     }
     let mut command = Command::new(&runtime.engine);
     command.arg("cuttlefish").arg(&runtime.images);
+    let boot_network = if std::env::var("GLIDEPOD_INTERNAL_CANDIDATE").as_deref() == Ok("1") {
+        crate::network::Configuration::default()
+    } else {
+        config.network.clone()
+    };
+    boot_network.prepare(&mut command)?;
     if let Some(gpu) = &gpu {
         command
             .args(["--gpu", "gfxstream", "--gfxstream-dir"])
-            .arg(&gpu.directory);
+            .arg(&gpu.directory)
+            // Bind execution to the driver whose artifacts were verified above.
+            .env("ANDROID_EMU_VK_ICD", gpu.driver.icd());
     } else {
         command.args(["--gpu", "2d"]);
     }
@@ -564,6 +580,8 @@ fn worker_inner(
             &settings.memory_mib.to_string(),
             "--display",
             "720x1280",
+            "--refresh-rate",
+            &settings.refresh_rate_hz.to_string(),
             "--exit-on-reboot",
             "--no-microphone",
             "--cameras",
@@ -593,6 +611,8 @@ fn worker_inner(
     let mut stop_sent = false;
     let mut failure = None;
     let mut _exports = None;
+    let mut _location = None;
+    let mut _network = None;
     loop {
         // Keep shutdown independent of guest readiness and the UI thread.
         if cancelled.load(std::sync::atomic::Ordering::Acquire) && stop_at.is_none() {
@@ -644,7 +664,7 @@ fn worker_inner(
                 VmState::Failed {
                     message: failure
                         .clone()
-                        .unwrap_or_else(|| format!("Android exited ({exit}). See engine.log.")),
+                        .unwrap_or_else(|| engine_exit_message(store, &exit)),
                 }
             };
             status.message = match &status.vm {
@@ -689,6 +709,14 @@ fn worker_inner(
                                 );
                                 begin_stop(&mut lifecycle, &mut status, epoch, &mut stop_at)?;
                             } else if matches!(lifecycle.state, VmState::Starting { .. }) {
+                                if std::env::var("GLIDEPOD_INTERNAL_CANDIDATE").as_deref()
+                                    != Ok("1")
+                                {
+                                    crate::system_apps::prepare(
+                                        &sockets.path().join("vsock.sock"),
+                                        config.minimal_builtin_apps,
+                                    )?;
+                                }
                                 lifecycle.guest_ready(generation, ProfileId::Developer, true)?;
                                 status.vm = VmState::Running { epoch };
                                 status.endpoints = Some(crate::guest::Endpoints {
@@ -698,14 +726,23 @@ fn worker_inner(
                                     frames: instance.join("frames"),
                                 });
                                 status.effective_root = true;
+                                status.effective_network = Some(boot_network.clone());
                                 status.effective_renderer = Some(if gpu.is_some() {
                                     Renderer::Metal
                                 } else {
                                     Renderer::Software
                                 });
+                                status.vulkan_driver = gpu.as_ref().map(|g| g.driver);
                                 status.fingerprint = Some(fingerprint.into());
                                 status.message = if gpu.is_some() { "Android is running with experimental Metal rendering. Game compatibility is not qualified." } else { "Android is running with software rendering. Guest root access verified." }.into();
                                 atomic_json(&store.root().join("session-status.json"), &status)?;
+                                _network = Some(crate::network::Worker::start(
+                                    crate::guest::Guest {
+                                        store: store.clone(),
+                                        endpoints: status.endpoints.clone().unwrap(),
+                                    },
+                                    boot_network.mode,
+                                ));
                                 if std::env::var("GLIDEPOD_INTERNAL_CANDIDATE").as_deref()
                                     != Ok("1")
                                 {
@@ -715,6 +752,11 @@ fn worker_inner(
                                             endpoints: status.endpoints.clone().unwrap(),
                                         },
                                     ));
+                                    _location =
+                                        Some(crate::location::Worker::start(crate::guest::Guest {
+                                            store: store.clone(),
+                                            endpoints: status.endpoints.clone().unwrap(),
+                                        }));
                                 }
                             }
                         }
@@ -763,6 +805,25 @@ fn worker_inner(
             libc::poll(&mut ready, 1, 40);
         }
     }
+}
+
+fn engine_exit_message(store: &Store, exit: &std::process::ExitStatus) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let detail = (|| -> Result<Option<String>> {
+        let mut file = File::open(store.root().join("engine.log"))?;
+        let length = file.metadata()?.len();
+        file.seek(SeekFrom::Start(length.saturating_sub(8192)))?;
+        let mut bytes = Vec::new();
+        file.take(8192).read_to_end(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes)
+            .lines()
+            .rev()
+            .find(|line| line.starts_with("error: "))
+            .map(|line| line.chars().filter(|c| !c.is_control()).take(600).collect()))
+    })()
+    .ok()
+    .flatten();
+    detail.unwrap_or_else(|| format!("Android exited ({exit}). See engine.log."))
 }
 fn begin_stop(
     lifecycle: &mut Lifecycle,

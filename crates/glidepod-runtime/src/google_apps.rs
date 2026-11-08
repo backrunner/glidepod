@@ -31,6 +31,8 @@ pub struct Progress {
 pub enum Action {
     Install,
     Remove,
+    Enable,
+    Disable,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Installation {
@@ -39,6 +41,11 @@ pub struct Installation {
     pub image_identity: String,
     pub files: Vec<String>,
     pub state: String,
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+}
+fn enabled_by_default() -> bool {
+    true
 }
 #[derive(Serialize, Deserialize)]
 struct Journal {
@@ -222,10 +229,15 @@ impl Store {
             "Google services currently require the Android Developer profile"
         );
         emit(progress, "Stopping Android…");
+        // Maintenance is an explicit stop, including when invoked through the CLI.
+        fs::write(
+            self.root().join("background-paused"),
+            b"Stopped for Google services maintenance.\n",
+        )?;
         if self.runtime_status()?.active() {
             // The UI lifetime pipe may already have requested shutdown. A closed
             // control socket does not prevent waiting for the actual session lock.
-            let _ = self.stop_vm();
+            let _ = self.stop_background_vm();
         }
         let deadline = Instant::now() + Duration::from_secs(35);
         let _session = loop {
@@ -242,13 +254,20 @@ impl Store {
         self.check_google_apps_image()?;
         check_cancel(cancel)?;
         let installed = self.google_apps_installation()?;
+        // Installing an already present, disabled package means turning it back on.
+        let action = if action == Action::Install && installed.as_ref().is_some_and(|i| !i.enabled)
+        {
+            Action::Enable
+        } else {
+            action
+        };
         if action == Action::Install && installed.is_some() {
             emit(progress, "Google services are already installed.");
             return Ok(());
         }
         ensure!(
-            action != Action::Remove || installed.is_some(),
-            "No GlidePod-managed Google services installation to remove"
+            action == Action::Install || installed.is_some(),
+            "No GlidePod-managed Google services installation"
         );
         let instance = self.root().join("developer/instance");
         ensure!(
@@ -309,32 +328,48 @@ impl Store {
                         "An unmanaged Google services installation already exists"
                     );
                 }
-                if root_shell(&guest, "avbctl get-verity")?.contains("verity is enabled") {
-                    root_shell(&guest, "avbctl disable-verity")?;
-                    candidate.stop()?;
-                    guest = candidate.start(helper, cancel)?;
-                }
-                let remount = root_shell(&guest, "remount")?;
-                if remount.to_lowercase().contains("reboot your device") {
-                    candidate.stop()?;
-                    guest = candidate.start(helper, cancel)?;
-                    root_shell(&guest, "remount")?;
-                }
-                root_shell(
-                    &guest,
-                    "set -e; touch /product/.glidepod-probe /system_ext/.glidepod-probe; rm /product/.glidepod-probe /system_ext/.glidepod-probe; mount -o remount,async /mnt/scratch",
-                )?;
-                if let Some(payload) = &payload {
-                    install_payload(&guest, payload, cancel, progress)?;
+                if matches!(action, Action::Install | Action::Remove) {
+                    if root_shell(&guest, "avbctl get-verity")?.contains("verity is enabled") {
+                        root_shell(&guest, "avbctl disable-verity")?;
+                        candidate.stop()?;
+                        guest = candidate.start(helper, cancel)?;
+                    }
+                    let remount = root_shell(&guest, "remount")?;
+                    if remount.to_lowercase().contains("reboot your device") {
+                        candidate.stop()?;
+                        guest = candidate.start(helper, cancel)?;
+                        root_shell(&guest, "remount")?;
+                    }
+                    root_shell(
+                        &guest,
+                        "set -e; touch /product/.glidepod-probe /system_ext/.glidepod-probe; rm /product/.glidepod-probe /system_ext/.glidepod-probe; mount -o remount,async /mnt/scratch",
+                    )?;
+                    if let Some(payload) = &payload {
+                        install_payload(&guest, payload, cancel, progress)?;
+                    } else {
+                        remove_payload(&guest, installed.as_ref().unwrap(), cancel, progress)?;
+                    }
                 } else {
-                    remove_payload(&guest, installed.as_ref().unwrap(), cancel, progress)?;
+                    emit(
+                        progress,
+                        if action == Action::Enable {
+                            "Turning on Google services…"
+                        } else {
+                            "Turning off Google services; keeping account and app data…"
+                        },
+                    );
+                    set_enabled(&guest, action == Action::Enable)?;
                 }
                 check_cancel(cancel)?;
                 emit(progress, "Restarting and checking Google services…");
                 candidate.stop()?;
                 guest = candidate.start(helper, cancel)?;
-                let after = guest.google_services()?;
                 if action == Action::Install {
+                    // A previous remove/disable can leave per-user package preferences.
+                    set_enabled(&guest, true)?;
+                }
+                let after = guest.google_services()?;
+                if matches!(action, Action::Install | Action::Enable) {
                     ensure!(
                         after.inventory.packages.iter().all(|p| p.installed
                             && p.enabled
@@ -345,10 +380,20 @@ impl Store {
                     let window = guest.open_app("com.android.vending", 720, 1080)?;
                     ensure!(window.task_count()? > 0, "Play Store could not open");
                     drop(window);
-                } else {
+                } else if action == Action::Remove {
                     ensure!(
                         after.inventory.packages.iter().all(|p| !p.installed),
                         "Google components remain; the original Android instance will be restored"
+                    );
+                } else {
+                    ensure!(
+                        after
+                            .inventory
+                            .packages
+                            .iter()
+                            .all(|p| p.installed && !p.enabled),
+                        "Google services did not turn off; the original Android instance will be restored: {}",
+                        after.summary()
                     );
                 }
                 Ok(())
@@ -373,8 +418,21 @@ impl Store {
                         image_identity: image_identity(self)?,
                         files: payload.files,
                         state: "ready_for_sign_in".into(),
+                        enabled: true,
                     },
                 )?;
+            } else if matches!(action, Action::Enable | Action::Disable) {
+                let mut installation = installed
+                    .clone()
+                    .context("Missing Google services installation")?;
+                installation.enabled = action == Action::Enable;
+                installation.state = if installation.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+                .into();
+                record(&staged.join(RECORD), &installation)?;
             } else if staged.join(RECORD).exists() {
                 fs::remove_file(staged.join(RECORD))?;
                 sync_dir(&staged)?;
@@ -406,6 +464,17 @@ impl Store {
         self.recover_google_apps_locked()
             .context("Recovery is pending. Start Android or select Recover to finish safely.")?;
         result?;
+        if matches!(action, Action::Disable | Action::Remove)
+            && let Err(error) = self.forget_cached_play_store()
+        {
+            // This is a derived catalog, not part of the committed Android transaction.
+            emit(
+                progress,
+                &format!(
+                    "Google services changed; the app list will refresh when Android starts ({error})."
+                ),
+            );
+        }
         // The verified archive is only a retry cache. Successful operations retain no installer payloads.
         let cache = self.root().join("google-apps-cache");
         if cache.exists() {
@@ -413,15 +482,28 @@ impl Store {
         }
         emit(
             progress,
-            if action == Action::Install {
-                "Google services installed. Start Android to sign in."
-            } else {
-                "Google services removed."
+            match action {
+                Action::Install => "Google services installed. Start Android to sign in.",
+                Action::Remove => {
+                    "Google services removed. You can install them again at any time."
+                }
+                Action::Enable => "Google services are on. Start Android to use them.",
+                Action::Disable => {
+                    "Google services are off. Account and app data are preserved; Google push is unavailable until turned on."
+                }
             },
         );
         Ok(())
     }
 }
+fn set_enabled(guest: &Guest, enabled: bool) -> Result<()> {
+    guest.bridge(
+        "dev.glidepod.bridge.GoogleServices",
+        &[if enabled { "enable" } else { "disable" }],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn clone_instance(source: &Path, target: &Path, cancel: &AtomicBool) -> Result<()> {
     fs::create_dir_all(target)?;
     for entry in fs::read_dir(source)? {
@@ -655,6 +737,17 @@ fn remove_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_installation_records_stay_enabled_and_off_state_round_trips() -> Result<()> {
+        let old = serde_json::json!({"schema_version":1,"package_sha256":"fixture",
+            "image_identity":"image","files":[],"state":"ready_for_sign_in"});
+        let mut installed: Installation = serde_json::from_value(old)?;
+        assert!(installed.enabled);
+        installed.enabled = false;
+        let restored: Installation = serde_json::from_slice(&serde_json::to_vec(&installed)?)?;
+        assert!(!restored.enabled);
+        Ok(())
+    }
     #[test]
     fn interrupted_promotions_restore_original_and_committed_promotions_keep_new() -> Result<()> {
         for (phase, moved, activated) in [

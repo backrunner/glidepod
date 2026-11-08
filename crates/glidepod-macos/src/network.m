@@ -1,6 +1,7 @@
 // Read-only system proxy inventory. Never fetch PAC, open a connection or change preferences.
 #import <Foundation/Foundation.h>
 #import <CFNetwork/CFNetwork.h>
+#import <vmnet/vmnet.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -56,4 +57,24 @@ char *glidepod_system_proxy_snapshot(void) {
 
 void glidepod_system_proxy_snapshot_free(char *result) {
     free(result);
+}
+
+char *glidepod_bridge_interfaces(void) {
+    @autoreleasepool {
+        xpc_object_t interfaces = vmnet_copy_shared_interface_list();
+        NSMutableArray *names = [NSMutableArray new];
+        if (interfaces && xpc_get_type(interfaces) == XPC_TYPE_ARRAY) {
+            size_t count = MIN(xpc_array_get_count(interfaces), 64);
+            for (size_t i = 0; i < count; i++) {
+                const char *name = xpc_array_get_string(interfaces, i);
+                if (name) { NSString *text = [NSString stringWithUTF8String:name]; if (text) [names addObject:text]; }
+            }
+        }
+        NSData *json = [NSJSONSerialization dataWithJSONObject:names options:0 error:nil];
+        if (!json || json.length > 8192) return NULL;
+        char *result = malloc(json.length + 1);
+        if (!result) return NULL;
+        memcpy(result, json.bytes, json.length); result[json.length] = '\0';
+        return result;
+    }
 }

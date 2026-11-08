@@ -42,18 +42,79 @@ pub struct WindowInfo {
     pub epoch: u64,
     pub width: u32,
     pub height: u32,
+    pub refresh_rate_hz: u32,
+}
+impl WindowInfo {
+    pub fn frame_period(&self) -> Duration {
+        Duration::from_nanos(1_000_000_000 / u64::from(self.refresh_rate_hz))
+    }
 }
 pub struct AppWindow {
     pub guest: Guest,
     pub info: WindowInfo,
     _slot: File,
     _package: File,
+    _activity: File,
     source: Mutex<Option<FrameSource>>,
     pub(crate) input_open: AtomicBool,
 }
 struct FrameSource {
     file: File,
     generation: u32,
+}
+/// Bounded, persistent notifications; pixels still come from the latest shared frame.
+pub struct FrameNotifications {
+    reader: BufReader<UnixStream>,
+    pending: String,
+    scanout: u32,
+}
+impl FrameNotifications {
+    /// Wait without polling pixels. Preserve fragmented lines across timeouts.
+    pub fn wait(&mut self, timeout: Duration) -> Result<bool> {
+        let deadline = Instant::now() + timeout;
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            self.reader
+                .get_mut()
+                .set_read_timeout(Some(remaining.max(Duration::from_millis(1))))?;
+            let read = self
+                .reader
+                .by_ref()
+                .take((8193 - self.pending.len()) as u64)
+                .read_line(&mut self.pending);
+            ensure!(
+                self.pending.len() <= 8192,
+                "Display notification exceeds size limit"
+            );
+            match read {
+                Ok(0) => anyhow::bail!("Display notification stream closed"),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Ok(false);
+                }
+                Err(e) => return Err(e.into()),
+                Ok(_) => {}
+            }
+            if !self.pending.ends_with('\n') {
+                continue;
+            }
+            let line = std::mem::take(&mut self.pending);
+            let mut fields = line.split_whitespace();
+            let event = fields.next();
+            if fields.next().and_then(|v| v.parse::<u32>().ok()) != Some(self.scanout) {
+                continue;
+            }
+            match event {
+                Some("frame" | "frames") => return Ok(true),
+                Some("frames-off") => anyhow::bail!("App display was removed"),
+                _ => {}
+            }
+        }
+        Ok(false)
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
@@ -70,10 +131,38 @@ pub struct Frame {
 /// Convert between packed RGBA and BGRA, preserving green and alpha.
 pub fn swap_red_blue(pixels: &mut [u8]) {
     for pixel in pixels.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
+        // Whole-word operations vectorize without overlapping byte stores. Use
+        // explicit byte order so the same lane permutation also works on big endian.
+        let word = u32::from_le_bytes(*pixel);
+        *pixel =
+            ((word & 0xff00ff00) | ((word & 0xff) << 16) | ((word >> 16) & 0xff)).to_le_bytes();
     }
 }
 impl Guest {
+    fn prepare_independent_displays(&self) -> Result<()> {
+        // Re-fabricating an unchanged overlay updates Android's asset paths and
+        // recreates other activities, invalidating their Vulkan surfaces. Check
+        // the effective resource and serialize first-time setup across clients.
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(self.store.root().join("display-configuration.lock"))?;
+        LockExt::lock_exclusive(&lock)?;
+        self.verify_epoch()?;
+        let lookup = "cmd overlay lookup android android:bool/config_localDisplaysMirrorContent";
+        if self.shell(lookup)?.trim() != "false" {
+            self.shell("su 0 cmd overlay fabricate --target android --name glidepod_displays android:bool/config_localDisplaysMirrorContent 0x12 0x0 && su 0 cmd overlay enable com.android.shell:glidepod_displays")?;
+            ensure!(
+                self.shell(lookup)?.trim() == "false",
+                "Android did not enable independent app displays"
+            );
+        }
+        Ok(())
+    }
+
     pub fn open_app(&self, package: &str, width: u32, height: u32) -> Result<AppWindow> {
         self.open_target(package, width, height, None)
     }
@@ -93,6 +182,16 @@ impl Guest {
         notification: Option<&crate::notifications::AndroidNotification>,
     ) -> Result<AppWindow> {
         package_id(package)?;
+        let activity = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(self.store.root().join("activity.lock"))?;
+        LockExt::try_lock_shared(&activity)
+            .context("Android is entering standby. Open the app again after it stops.")?;
+        self.verify_epoch()?;
         self.prepare_input()?;
         ensure!(
             (320..=2048).contains(&width) && (320..=2048).contains(&height),
@@ -116,9 +215,24 @@ impl Guest {
         let (scanout, slot) = (1..16)
             .find_map(|n| lock(&format!("display-{n}.lock")).ok().map(|f| (n, f)))
             .context("All 15 app displays are in use")?;
-        self.shell("su 0 cmd overlay fabricate --target android --name glidepod_displays android:bool/config_localDisplaysMirrorContent 0x12 0x0 && su 0 cmd overlay enable com.android.shell:glidepod_displays")?;
+        self.prepare_independent_displays()?;
         self.shell("wm dismiss-keyguard")?;
-        control(self, &format!("display {scanout} {width} {height}"))?;
+        // Use the running VM's settings, not a next-start preference edited while
+        // it is running. Primary and app displays must have the same timing.
+        let refresh_rate_hz = self
+            .store
+            .runtime_status()?
+            .resources
+            .context("Running display settings unavailable")?
+            .refresh_rate_hz;
+        ensure!(
+            [60, 90, 120].contains(&refresh_rate_hz),
+            "Invalid running display rate"
+        );
+        control(
+            self,
+            &format!("display {scanout} {width} {height} {refresh_rate_hz}"),
+        )?;
         let mut window = AppWindow {
             guest: self.clone(),
             info: WindowInfo {
@@ -128,9 +242,11 @@ impl Guest {
                 epoch: self.endpoints.epoch,
                 width,
                 height,
+                refresh_rate_hz,
             },
             _slot: slot,
             _package: package_lock,
+            _activity: activity,
             source: Mutex::new(None),
             input_open: AtomicBool::new(false),
         };
@@ -319,6 +435,17 @@ impl AppWindow {
     pub fn frame(&self, last_sequence: u64) -> Result<Option<Frame>> {
         self.frame_in_format(last_sequence, PixelFormat::Rgba)
     }
+    pub fn subscribe_frames(&self) -> Result<FrameNotifications> {
+        self.guest.verify_epoch()?;
+        let mut socket = UnixStream::connect(&self.guest.endpoints.control)?;
+        socket.set_write_timeout(Some(Duration::from_secs(2)))?;
+        writeln!(socket, "subscribe")?;
+        Ok(FrameNotifications {
+            reader: BufReader::new(socket),
+            pending: String::new(),
+            scanout: self.info.scanout,
+        })
+    }
     /// Read directly in the consumer's format. GPUI needs BGRA; captures need RGBA.
     /// Conversion runs on the caller's frame worker, never on the UI thread.
     pub fn frame_in_format(
@@ -461,6 +588,88 @@ fn read_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn frame_notifications_preserve_fragments_filter_displays_and_bound_input() {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        let mut notifications = FrameNotifications {
+            reader: BufReader::new(reader),
+            pending: String::new(),
+            scanout: 2,
+        };
+        writer.write_all(b"ok\nframe 1 9\nframe 2").unwrap();
+        assert!(!notifications.wait(Duration::from_millis(10)).unwrap());
+        writer.write_all(b" 10\n").unwrap();
+        assert!(notifications.wait(Duration::from_millis(50)).unwrap());
+        writer.write_all(b"frames-off 1\nframe 2 11\n").unwrap();
+        assert!(notifications.wait(Duration::from_millis(50)).unwrap());
+        // macOS socket buffers can be smaller than this payload; feed it while
+        // the reader is active instead of deadlocking the test's writer.
+        let oversized = std::thread::spawn(move || writer.write_all(&vec![b'x'; 8193]).unwrap());
+        assert!(notifications.wait(Duration::from_millis(50)).is_err());
+        oversized.join().unwrap();
+        let (reader, writer) = UnixStream::pair().unwrap();
+        let mut closed = FrameNotifications {
+            reader: BufReader::new(reader),
+            pending: String::new(),
+            scanout: 2,
+        };
+        drop(writer);
+        assert!(closed.wait(Duration::from_millis(50)).is_err());
+    }
+    #[test]
+    fn swizzle_preserves_alpha_green_and_incomplete_pixel_tails() {
+        let original: Vec<_> = (0u8..=255)
+            .flat_map(|red| {
+                (0u8..=255).flat_map(move |blue| [red, red.wrapping_add(blue), blue, red ^ blue])
+            })
+            .collect();
+        for tail in 0..4 {
+            let mut bytes = original.clone();
+            bytes.extend_from_slice(&[19, 71, 123][..tail]);
+            let mut reference = bytes.clone();
+            for pixel in reference.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+            swap_red_blue(&mut bytes);
+            assert_eq!(bytes, reference);
+            swap_red_blue(&mut bytes);
+            assert_eq!(&bytes[..original.len()], original);
+        }
+    }
+    #[test]
+    #[ignore = "synthetic channel conversion only; run alone with --ignored --nocapture"]
+    fn swizzle_benchmark() {
+        for size in [720 * 1080 * 4, 1080 * 1920 * 4, 2048 * 2048 * 4] {
+            let mut pixels = vec![123; size];
+            let mut timings = [Vec::new(), Vec::new()];
+            for iteration in 0..330 {
+                for path in [iteration % 2, 1 - iteration % 2] {
+                    let start = Instant::now();
+                    let bytes = std::hint::black_box(&mut pixels);
+                    if path == 0 {
+                        for pixel in bytes.as_chunks_mut::<4>().0 {
+                            pixel.swap(0, 2);
+                        }
+                    } else {
+                        swap_red_blue(bytes);
+                    }
+                    std::hint::black_box(&pixels);
+                    if iteration >= 30 {
+                        timings[path].push(start.elapsed().as_secs_f64() * 1000.);
+                    }
+                }
+            }
+            for (path, times) in timings.iter_mut().enumerate() {
+                times.sort_by(f64::total_cmp);
+                println!(
+                    "{}",
+                    serde_json::json!({"scope":"synthetic_channel_swap", "pixel_bytes":size,
+                    "path":if path==0 {"byte_swap"} else {"word_permutation"}, "samples":times.len(),
+                    "p50_ms":times[150], "p95_ms":times[285]})
+                );
+            }
+        }
+    }
     fn frame_file(width: u32, height: u32, format: u32) -> File {
         let file = tempfile::tempfile().unwrap();
         let size = width * height * 4;

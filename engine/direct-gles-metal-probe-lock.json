@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "status": "incompatible-evaluation-probe-not-a-product-renderer",
+  "android_emulator_version": "37.2.13",
+  "archive_url": "https://dl.google.com/android/repository/emulator-darwin_aarch64-16740729.zip",
+  "archive_sha1": "6c5e61b873e11c7d1d08683bea089f762baee070",
+  "archive_sha256": "9e50ac521c38949d412f69250c0df9a4afa684d5be54ab4b80fc0205a73f5054",
+  "angle_revision": "fbf66f49c7cc",
+  "files": {
+    "lib64/gles_angle/libEGL.dylib": "e84088e3519d06d1b07332bf2b15f7a4b7d490d51e8c3d77b02b7a79130697d5",
+    "lib64/gles_angle/libGLESv2.dylib": "0e5b6c54380c0171b02330bccf969170cca7a5578ed03e5d07296d29c1b82b1c"
+  },
+  "vmm_patch": "engine/patches/avo-direct-gles-metal-probe.patch",
+  "full_correctness_passed": false
+}

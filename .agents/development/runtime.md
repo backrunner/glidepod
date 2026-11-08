@@ -43,6 +43,42 @@ The renderer build also needs CMake and Ninja. Read the [GLES 3 renderer record]
 
 This candidate enables MoltenVK's optional private Metal implementation. It is an experimental external component, not an App Store-compatible or production-qualified renderer. No Vulkan/GLES conformance or broad game compatibility is claimed.
 
+### Evaluate KosmicKrisp on Apple Silicon
+
+On macOS 26 or later, the same gfxstream backend can use the pinned KosmicKrisp driver from LunarG's SDK. Extract SDK **1.4.363.1** into a project-local directory using its documented `copy_only=1` installation option; a global SDK installation is unnecessary. This candidate uses an SDK binary, not a GlidePod source build. The preparation tool verifies driver/base-library hashes and creates an immutable directory:
+
+```sh
+rtk proxy python3 tools/prepare-kosmickrisp-renderer.py --sdk /absolute/path/to/extracted/sdk
+rtk proxy target/debug/glidepodctl --data-dir .cache/graphics-test register-gpu /absolute/path/printed/by/the/tool --driver kosmickrisp
+rtk proxy target/debug/glidepodctl --data-dir .cache/graphics-test configure --renderer metal
+```
+
+Use an already prepared disposable store and stop it before registration. The driver is pinned in `experimental-gpu.json`; the worker sets the selected ICD explicitly, so a shell's `ANDROID_EMU_VK_ICD` cannot silently substitute a different driver. Omitting `--driver` retains MoltenVK, including for older registrations. The version 2 registry retains both driver registrations and the selected driver in one atomic file; legacy registrations migrate without changing their selection. Automatic still uses Software.
+
+In **Graphics → Vulkan driver**, register each driver directory and use **Use** to select a registered driver while Android is stopped. **Currently using** describes the live runtime; **Next Metal start** describes the saved selection. Both registration and selection verify pinned artifacts. A failed verification leaves the previous selection intact. The equivalent CLI commands are:
+
+```sh
+rtk proxy target/debug/glidepodctl gpu-driver
+rtk proxy target/debug/glidepodctl gpu-driver kosmickrisp
+rtk proxy target/debug/glidepodctl gpu-driver moltenvk
+```
+
+### Uncapped graphics pressure tests
+
+Use an explicitly selected disposable project-local store. Start its intended engine and driver first, then run workloads sequentially without concurrent builds or other GPU benchmarks:
+
+```sh
+rtk proxy python3 tools/evaluate-gles-stress.py --data-dir .cache/graphics-test --output evidence/stress-moltenvk-gles --label moltenvk
+rtk proxy python3 tools/evaluate-gles-stress.py --data-dir .cache/graphics-test --output evidence/stress-moltenvk-vulkan --label moltenvk --api vulkan
+rtk proxy target/debug/glidepodctl --data-dir .cache/graphics-test --json vulkan-stress --objects 256 --seconds 1 --validation
+```
+
+GLES uses the same original C++ workload on Android and in the optional host ANGLE probe (`tools/gles-stress.cpp`). Vulkan uses direct Android libvulkan with an indexed, textured scene. Each waits for completion per frame; neither includes swap/presentation/readback in its timed loop. They report completed frames per second, **not display FPS**, with two seconds of warmup, 30 seconds per measured case, and two passes by default. Validation-enabled Vulkan runs must remain separate from performance samples.
+
+The runner retains per-run identities, correctness, image probes, CPU usage and latency distributions in a new evidence directory. Diagnostic reports are also saved in `developer/stress/`. A failed correctness check returns failure even when diagnostic timings exist. `--allow-incompatible-probe` continues collecting these diagnostics but still exits with failure. See [the pressure-test and direct Metal record](../implementation/24-graphics-pressure-and-driver-settings.md) before interpreting results or using the experimental host GLES patch.
+
+See the [graphics audit](../implementation/23-graphics-drivers-and-metal.md), [candidate lock](../../engine/kosmickrisp-renderer-lock.json), and [LunarG installation instructions](https://vulkan.lunarg.com/doc/view/latest/mac/getting_started.html). Host-driver conformance does not qualify the guest translation stack, game compatibility or redistribution of the combined runtime.
+
 ## Work with apps
 
 With a registered runtime running:
@@ -90,3 +126,11 @@ The [asynchronous block I/O proposal](../implementation/10-async-block-io-plan.m
 Settings → Google services provides installation, removal, cancellation and interrupted-transaction recovery for the Android 17 ARM64 Developer runtime. CLI: `glidepodctl google-services install|remove|recover|status`. Existing Android data is preserved through candidate-disk promotion; see [transaction and notification behavior](../implementation/15-google-services-product-and-system-notifications.md). The installation record is bound to the image inventory; restore that runtime before booting or removing an installation after an incompatible image change.
 
 Settings → Notifications forwards all entries Android exposes to its notification listener, including system, ongoing and grouped notifications. Private/secret entries keep their place with redacted content. macOS permission is required. Neither Google API availability nor remote FCM is inferred from this local relay.
+
+## Source-built direct GLES Metal experiment
+
+The direct GLES candidate has a separate pinned ANGLE source build and VMM patch. It currently exposes ES 3.0. Build with `rtk proxy python3 tools/build-direct-gles-metal.py` and `rtk proxy python3 tools/build-memory-engine.py --host-services --gles-metal`; use only a stopped disposable store for registration and launch. The ANGLE builder prints the immutable library directory and required launch environment. It does not change user settings or register a driver. This GLES path remains independent of the Vulkan-driver selector. Follow [record 25](../implementation/25-direct-gles-metal-correctness.md) for the patches, exact tests and launch procedure, and [record 26](../implementation/26-metal-readback-tail.md) for bounded readback, packing regressions, multi-window lifecycle fixes and the subsequent controlled measurements.
+
+### High refresh display checks
+
+Graphics supports 60, 90 and 120 Hz as a next-start preference. The CLI equivalent is `configure --refresh-rate 120`. Existing profiles default to 60 Hz. The primary display and independent app displays use the running VM snapshot, so restart Android to apply a new rate. Frame delivery uses bounded VMM notifications and a single pending UI frame. See [record 27](../implementation/27-high-refresh-displays.md) for measured guest rates, host capture rates and native-presentation boundaries.

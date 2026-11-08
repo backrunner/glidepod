@@ -1,0 +1,176 @@
+diff --git a/src/libANGLE/renderer/metal/ContextMtl.mm b/src/libANGLE/renderer/metal/ContextMtl.mm
+index 3b2b89e..5c520a3 100644
+--- a/src/libANGLE/renderer/metal/ContextMtl.mm
++++ b/src/libANGLE/renderer/metal/ContextMtl.mm
+@@ -793,7 +793,10 @@ GLint GetOwnershipIdentity(const egl::AttributeMap &attribs)
+         return angle::Result::Continue;
+     }
+ 
+-    if (mode == gl::PrimitiveMode::TriangleFan)
++    // Indexed fans with flat attributes need the same last-provoking-vertex
++    // rewrite as strips. The fan fast path preserves the first index instead.
++    if (mode == gl::PrimitiveMode::TriangleFan &&
++        !requiresIndexRewrite(context->getState(), mode))
+     {
+         return drawTriFanElements(context, count, type, indices, instanceCount, baseVertex,
+                                   baseInstance);
+diff --git a/src/libANGLE/renderer/metal/VertexArrayMtl.mm b/src/libANGLE/renderer/metal/VertexArrayMtl.mm
+index 9c66ebc..8687eaf 100644
+--- a/src/libANGLE/renderer/metal/VertexArrayMtl.mm
++++ b/src/libANGLE/renderer/metal/VertexArrayMtl.mm
+@@ -830,6 +830,7 @@ void AppendSimpleDrawCommandRanges(std::vector<DrawCommandRange> &drawCommands,
+         {
+             case gl::PrimitiveMode::Triangles:
+             case gl::PrimitiveMode::TriangleStrip:
++            case gl::PrimitiveMode::TriangleFan:
+                 newMode = gl::PrimitiveMode::Triangles;
+                 break;
+             case gl::PrimitiveMode::Lines:
+diff --git a/src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_autogen.metal b/src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_autogen.metal
+index c1b0128..2322174 100644
+--- a/src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_autogen.metal
++++ b/src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_autogen.metal
+@@ -2737,6 +2737,32 @@ static inline void outputPrimitive(
+             assert(onOutIndex <= (indexCount - 2) * 3);
+         }
+         break;
++        case 0x06U:
++        {
++            auto tmpIndex0 = readIdx(indexBufferUint16, indexBufferUint32, restartIndex, indexCount, baseIndex, foundRestart, indexThatRestartedFirst);
++            auto tmpIndex1 = readIdx(indexBufferUint16, indexBufferUint32, restartIndex, indexCount, onIndex + 1, foundRestart, indexThatRestartedFirst);
++            auto tmpIndex2 = readIdx(indexBufferUint16, indexBufferUint32, restartIndex, indexCount, onIndex + 2, foundRestart, indexThatRestartedFirst);
++            if (foundRestart)
++            {
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = restartIndex; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = restartIndex; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = restartIndex; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = restartIndex; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = restartIndex; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = restartIndex; } onOutIndex++; });
++                return;
++            }
++            if (fixIndexBufferKey & 0x00200U)
++            {
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex2; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex2; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex0; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex0; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex1; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex1; } onOutIndex++; });
++            }
++            else
++            {
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex1; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex1; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex2; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex2; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex0; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex0; } onOutIndex++; });
++            }
++        }
++        break;
+     }
+ }
+ kernel void fixIndexBuffer(
+@@ -2773,6 +2799,7 @@ kernel void fixIndexBuffer(
+                 onOutIndex = prim * 3;
+                 break;
+             case 0x05U:
++            case 0x06U:
+                 onIndex = prim;
+                 onOutIndex = prim * 3;
+                 break;
+diff --git a/src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_src_autogen.h b/src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_src_autogen.h
+index 3d70820..610eccb 100644
+--- a/src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_src_autogen.h
++++ b/src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_src_autogen.h
+@@ -8,6 +8,8 @@
+ 
+ // C++ string version of combined Metal default shaders.
+ 
++
++
+ static char gDefaultMetallibSrc[] = R"(
+ # include <simd/simd.h>
+ # include <metal_stdlib>
+@@ -2738,6 +2740,32 @@ static inline void outputPrimitive(
+             assert(onOutIndex <= (indexCount - 2) * 3);
+         }
+         break;
++        case 0x06U:
++        {
++            auto tmpIndex0 = readIdx(indexBufferUint16, indexBufferUint32, restartIndex, indexCount, baseIndex, foundRestart, indexThatRestartedFirst);
++            auto tmpIndex1 = readIdx(indexBufferUint16, indexBufferUint32, restartIndex, indexCount, onIndex + 1, foundRestart, indexThatRestartedFirst);
++            auto tmpIndex2 = readIdx(indexBufferUint16, indexBufferUint32, restartIndex, indexCount, onIndex + 2, foundRestart, indexThatRestartedFirst);
++            if (foundRestart)
++            {
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = restartIndex; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = restartIndex; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = restartIndex; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = restartIndex; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = restartIndex; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = restartIndex; } onOutIndex++; });
++                return;
++            }
++            if (fixIndexBufferKey & 0x00200U)
++            {
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex2; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex2; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex0; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex0; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex1; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex1; } onOutIndex++; });
++            }
++            else
++            {
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex1; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex1; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex2; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex2; } onOutIndex++; });
++                ({ if(outIndexBufferIsUint16) { outIndexBufferUint16[(onOutIndex)] = tmpIndex0; } if(outIndexBufferIsUint32) { outIndexBufferUint32[(onOutIndex)] = tmpIndex0; } onOutIndex++; });
++            }
++        }
++        break;
+     }
+ }
+ kernel void fixIndexBuffer(
+@@ -2774,6 +2802,7 @@ kernel void fixIndexBuffer(
+                 onOutIndex = prim * 3;
+                 break;
+             case 0x05U:
++            case 0x06U:
+                 onIndex = prim;
+                 onOutIndex = prim * 3;
+                 break;
+diff --git a/src/libANGLE/renderer/metal/shaders/rewrite_indices.metal b/src/libANGLE/renderer/metal/shaders/rewrite_indices.metal
+index dd0e5dc..7918dd8 100644
+--- a/src/libANGLE/renderer/metal/shaders/rewrite_indices.metal
++++ b/src/libANGLE/renderer/metal/shaders/rewrite_indices.metal
+@@ -230,6 +230,36 @@ static inline void outputPrimitive(
+         }
+         break;
+ 
++        case MtlFixIndexBufferKeyTriangleFan:
++        {
++            // Each dispatch range begins at its own fan anchor. Rotate each
++            // triangle without changing its winding so Metal's first vertex
++            // carries the GLES last-vertex flat attributes.
++            auto tmpIndex0 = READ_IDX(baseIndex);
++            auto tmpIndex1 = READ_IDX(onIndex + 1);
++            auto tmpIndex2 = READ_IDX(onIndex + 2);
++            if (foundRestart)
++            {
++                WRITE_IDX(onOutIndex, restartIndex);
++                WRITE_IDX(onOutIndex, restartIndex);
++                WRITE_IDX(onOutIndex, restartIndex);
++                return;
++            }
++            if (fixIndexBufferKey & MtlFixIndexBufferKeyProvokingVertexLast)
++            {
++                WRITE_IDX(onOutIndex, tmpIndex2);
++                WRITE_IDX(onOutIndex, tmpIndex0);
++                WRITE_IDX(onOutIndex, tmpIndex1);
++            }
++            else
++            {
++                WRITE_IDX(onOutIndex, tmpIndex1);
++                WRITE_IDX(onOutIndex, tmpIndex2);
++                WRITE_IDX(onOutIndex, tmpIndex0);
++            }
++        }
++        break;
++
+     }
+ #undef READ_IDX
+ #undef WRITE_IDX
+@@ -269,6 +299,7 @@ kernel void fixIndexBuffer(
+                 onOutIndex = prim * 3;
+                 break;
+             case MtlFixIndexBufferKeyTriangleStrip:
++            case MtlFixIndexBufferKeyTriangleFan:
+                 onIndex = prim;
+                 onOutIndex = prim * 3;
+                 break;

@@ -19,17 +19,11 @@ impl Center {
         let enabled = !self.config.notifications_enabled;
         let store = self.store.clone();
         let sender = self.sender.clone();
-        if enabled
-            && let Err(e) =
-                glidepod_macos::notifications::command(serde_json::json!({"op":"request"}))
-        {
-            self.working = false;
-            self.notice = Some(e.to_string());
-            cx.notify();
-            return;
-        }
         std::thread::spawn(move || {
             let action = || -> anyhow::Result<String> {
+                if enabled {
+                    store.request_notification_authorization()?;
+                }
                 let guest = store.guest();
                 if enabled {
                     guest
@@ -205,7 +199,17 @@ impl Center {
                 let r = store.guest().and_then(|g| {
                     let w = g.open_app("com.android.settings", 720, 1080)?;
                     g.open_android_app_settings(&package, w.info.display_id)?;
-                    Ok(w)
+                    let icon = g
+                        .catalog()?
+                        .into_iter()
+                        .find(|a| a.package_id == "com.android.settings")
+                        .and_then(|a| a.icon_path);
+                    crate::with_dock(
+                        w,
+                        "com.android.settings",
+                        "Android Settings",
+                        icon.as_deref(),
+                    )
                 });
                 let _ = sender.send(Work::Opened(
                     "com.android.settings".into(),

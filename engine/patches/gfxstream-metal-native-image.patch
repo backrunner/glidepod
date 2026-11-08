@@ -1,0 +1,19 @@
+diff --git a/host/vulkan/vk_decoder_global_state.cpp b/host/vulkan/vk_decoder_global_state.cpp
+index 24f9fbc..6387e3d 100644
+--- a/host/vulkan/vk_decoder_global_state.cpp
++++ b/host/vulkan/vk_decoder_global_state.cpp
+@@ -3166,6 +3166,14 @@ class VkDecoderGlobalState::Impl {
+         imageInfo.layout = pCreateInfo->initialLayout;
+         imageInfo.anbInfo = std::move(anbInfo);
+ 
++        // Imported Android native images already use the ColorBuffer's memory;
++        // they do not pass through the guest vkBindImageMemory tracking path.
++        // Preserve that association so mixed GL/Vulkan submissions update the
++        // GL backing and its tracked layout before the compositor reads it.
++        if (imageInfo.anbInfo && imageInfo.anbInfo->isExternallyBacked()) {
++            imageInfo.boundColorBuffer = imageInfo.anbInfo->getColorBufferHandle();
++        }
++
+         if (boxImage) {
+             *pImage = new_boxed_non_dispatchable_VkImage(*pImage);
+             imageInfo.boxed = *pImage;

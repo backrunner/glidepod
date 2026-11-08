@@ -13,6 +13,9 @@ anyhow.workspace = true
 libc.workspace = true
 plist = "1"
 tempfile.workspace = true
+sha2.workspace = true
+hex.workspace = true
+fs2 = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "=0.33.0"

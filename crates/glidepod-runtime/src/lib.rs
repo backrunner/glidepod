@@ -1,5 +1,6 @@
 //! Persistent configuration, image preflight and an opt-in experimental VM supervisor.
 mod adb;
+pub mod background;
 pub mod benchmark;
 pub mod display;
 pub mod experimental;
@@ -7,11 +8,18 @@ pub mod files;
 pub mod google_apps;
 pub mod google_services;
 pub mod gpu;
+pub mod graphics_stress;
 pub mod guest;
 mod host_files_setup;
 pub mod input;
+pub mod location;
 pub mod management;
+pub mod memory;
+pub mod network;
+pub mod notification_relay;
 pub mod notifications;
+mod provider_poll;
+mod system_apps;
 use anyhow::{Context, Result, bail, ensure};
 use fs2::FileExt;
 use glidepod_core::{ProfileId, ProfileSettings, VmState};
@@ -39,6 +47,17 @@ pub struct Configuration {
     #[serde(default)]
     pub notifications_enabled: bool,
     #[serde(default)]
+    pub runtime_mode: glidepod_core::RuntimeMode,
+    /// Explicit notification/background intent survives periods without CPU activity.
+    #[serde(default)]
+    pub background_apps: Vec<String>,
+    #[serde(default = "minimal_apps_default")]
+    pub minimal_builtin_apps: bool,
+    #[serde(default)]
+    pub location: location::Configuration,
+    #[serde(default)]
+    pub network: network::Configuration,
+    #[serde(default)]
     pub recent_personal: Vec<String>,
     #[serde(default)]
     pub recent_developer: Vec<String>,
@@ -54,10 +73,18 @@ impl Default for Configuration {
             dark_mode: false,
             audio_enabled: true,
             notifications_enabled: false,
+            runtime_mode: glidepod_core::RuntimeMode::Automatic,
+            background_apps: Vec::new(),
+            minimal_builtin_apps: true,
+            location: location::Configuration::default(),
+            network: network::Configuration::default(),
             recent_personal: Vec::new(),
             recent_developer: Vec::new(),
         }
     }
+}
+fn minimal_apps_default() -> bool {
+    true
 }
 impl Configuration {
     pub fn recent_apps(&self) -> &[String] {
@@ -94,12 +121,23 @@ impl Configuration {
         );
         self.personal.validate(ProfileId::Personal)?;
         self.developer.validate(ProfileId::Developer)?;
+        self.location.validate()?;
+        self.network.validate()?;
+        ensure!(
+            self.background_apps.len() <= 256,
+            "Too many background apps"
+        );
+        for package in &self.background_apps {
+            crate::guest::package_id(package)?;
+        }
         Ok(())
     }
 }
 #[derive(Debug, Clone)]
 pub struct Store {
     root: PathBuf,
+    // Store clones share one bounded read-only provider channel per host process.
+    polls: std::sync::Arc<std::sync::Mutex<provider_poll::Pool>>,
 }
 impl Store {
     pub fn default_location() -> Result<Self> {
@@ -119,6 +157,7 @@ impl Store {
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
         Ok(Self {
             root: root.canonicalize()?,
+            polls: Default::default(),
         })
     }
     pub fn root(&self) -> &Path {
@@ -335,6 +374,37 @@ pub fn verify_image(manifest_path: &Path) -> Result<VerifiedImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_memory_allocations_survive_new_background_settings() {
+        let mut json = serde_json::to_value(Configuration::default()).unwrap();
+        for profile in ["personal", "developer"] {
+            json[profile].as_object_mut().unwrap().remove("memory_mode");
+            json[profile]
+                .as_object_mut()
+                .unwrap()
+                .remove("refresh_rate_hz");
+            json[profile]["memory_mib"] = serde_json::json!(3072);
+        }
+        json.as_object_mut().unwrap().remove("runtime_mode");
+        json.as_object_mut().unwrap().remove("background_apps");
+        json.as_object_mut().unwrap().remove("location");
+        json.as_object_mut().unwrap().remove("network");
+        let old: Configuration = serde_json::from_value(json).unwrap();
+        old.validate().unwrap();
+        assert_eq!(old.developer.memory_mib, 3072);
+        assert_eq!(old.developer.refresh_rate_hz, 60);
+        assert_eq!(old.personal.refresh_rate_hz, 60);
+        assert_eq!(old.developer.memory_mode, glidepod_core::MemoryMode::Manual);
+        assert_eq!(old.runtime_mode, glidepod_core::RuntimeMode::Automatic);
+        assert!(old.background_apps.is_empty());
+        assert_eq!(old.location.source, location::Source::Off);
+        assert!(old.location.point.is_none());
+        assert_eq!(old.network.mode, network::Mode::Shared);
+        assert_eq!(
+            Configuration::default().developer.memory_mode,
+            glidepod_core::MemoryMode::Automatic
+        );
+    }
     fn image_fixture(dir: &Path) -> PathBuf {
         let bytes = b"Synthetic image fixture; not bootable";
         fs::write(dir.join("system.img"), bytes).unwrap();

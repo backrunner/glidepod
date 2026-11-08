@@ -32,6 +32,9 @@ impl PendingFrame {
 }
 
 pub struct AndroidWindow {
+    pub(crate) title: String,
+    pub(crate) epoch: u64,
+    dock: glidepod_macos::dock::Session,
     input: WindowInput,
     files: crate::host_files::HostFiles,
     frames: Arc<PendingFrame>,
@@ -59,6 +62,7 @@ pub struct AndroidWindow {
 }
 pub fn open(
     session: AppWindow,
+    dock: glidepod_macos::dock::Session,
     title: String,
     game: bool,
     cx: &mut App,
@@ -69,27 +73,38 @@ pub fn open(
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(280.), px(360.))),
             titlebar: Some(TitlebarOptions {
-                title: Some(title.into()),
+                title: Some(title.clone().into()),
                 ..Default::default()
             }),
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| AndroidWindow::new(session, game, window, cx)),
+        |window, cx| cx.new(|cx| AndroidWindow::new(session, dock, title, game, window, cx)),
     )
 }
 impl AndroidWindow {
-    fn new(session: AppWindow, game: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        session: AppWindow,
+        dock: glidepod_macos::dock::Session,
+        title: String,
+        game: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let width = session.info.width;
         let height = session.info.height;
         let display_id = session.info.display_id;
+        let epoch = session.info.epoch;
+        let frame_period = session.info.frame_period();
         let session = Arc::new(session);
         let mut input = WindowInput::new(session.clone());
         let files = crate::host_files::HostFiles::new(session.clone(), input.stopped.clone());
         let frames = Arc::new(PendingFrame::default());
         let output = frames.clone();
         let stopped = input.stopped.clone();
+        let (frame_ready, frame_updates) = async_channel::bounded(1);
         std::thread::spawn(move || {
             let mut sequence = 0;
+            let mut notifications = session.subscribe_frames();
             while !stopped.load(Ordering::Acquire) {
                 // A paused/occluded consumer retains just one pending frame and stops
                 // expensive reads/conversions until drawing resumes. Wake on consumption
@@ -109,25 +124,39 @@ impl AndroidWindow {
                 if occupied {
                     continue;
                 }
-                let started = Instant::now();
-                match session.frame_in_format(sequence, PixelFormat::Bgra) {
+                let result = match notifications.as_mut() {
+                    Ok(notifications) => match notifications.wait(Duration::from_millis(100)) {
+                        Ok(false) => continue,
+                        Ok(true) => session.frame_in_format(sequence, PixelFormat::Bgra),
+                        Err(error) => Err(error),
+                    },
+                    Err(error) => Err(anyhow::anyhow!("{error:#}")),
+                };
+                match result {
                     Ok(Some(frame)) => {
                         sequence = frame.sequence;
                         *output.value.lock().unwrap() = Some(Ok(frame));
+                        let _ = frame_ready.try_send(());
                     }
                     Ok(None) => {}
                     Err(e) => {
                         *output.value.lock().unwrap() = Some(Err(format!("{e:#}")));
+                        let _ = frame_ready.try_send(());
                         std::thread::sleep(Duration::from_millis(250));
                     }
                 }
-                // Include read/conversion time in the polling period instead of
-                // adding it to every frame interval. Never accumulate catch-up work.
-                std::thread::sleep(
-                    Duration::from_nanos(16_666_667).saturating_sub(started.elapsed()),
-                );
             }
         });
+        // Wake GPUI on a new frame instead of adding another periodic timer's
+        // phase delay. The pixel slot and wake channel each hold at most one item.
+        cx.spawn_in(window, async move |this, cx| {
+            while frame_updates.recv().await.is_ok() {
+                if this.update_in(cx, |_, _, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         let focus = cx.focus_handle();
         window.focus(&focus);
         if window.is_window_active() {
@@ -143,15 +172,33 @@ impl AndroidWindow {
             this.files.focus(this.input.lease());
             cx.notify();
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
+            let mut work_time = Duration::ZERO;
             loop {
                 cx.background_executor()
-                    .timer(Duration::from_millis(16))
+                    .timer(frame_period.saturating_sub(work_time))
                     .await;
+                let started = Instant::now();
                 if this
-                    .update(cx, |this, cx| {
+                    .update_in(cx, |this, window, cx| {
+                        for event in this.dock.drain() {
+                            match event {
+                                glidepod_macos::dock::Event::Focus => {
+                                    cx.activate(true);
+                                    window.activate_window();
+                                }
+                                glidepod_macos::dock::Event::Close => {
+                                    window.remove_window();
+                                    return;
+                                }
+                                glidepod_macos::dock::Event::Unavailable(error) => {
+                                    this.error = Some(error);
+                                    cx.notify();
+                                }
+                            }
+                        }
                         this.poll_gestures();
-                        if this.frames.value.lock().unwrap().is_some() || this.files.due() {
+                        if this.files.due() {
                             cx.notify();
                         }
                         while let Ok(update) = this.input.updates.try_recv() {
@@ -193,10 +240,14 @@ impl AndroidWindow {
                 {
                     break;
                 }
+                work_time = started.elapsed();
             }
         })
         .detach();
         Self {
+            title,
+            epoch,
+            dock,
             input,
             files,
             frames,

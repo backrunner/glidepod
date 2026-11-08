@@ -37,17 +37,28 @@ GlidePod brings Android applications onto the Mac as individual windows, with an
 | [Independent windows and device input](implementation/05-independent-windows-and-input.md) | Separate frame/input workers, focus leases, continuous keyboard/pointer events, native controller mapping and real guest acceptance |
 | [3D, storage and notifications](implementation/06-3d-storage-and-notifications.md) | Real guest 3D workloads and frame transport costs, app storage/permissions, opt-in notification integration and evidence limits |
 | [GLES 3 Metal renderer](implementation/07-gles3-metal.md) | Source-built MoltenVK, dynamic fan fix, 13 targeted correctness checks, reproducible renderer and performance evidence |
+| [Graphics drivers and Metal](implementation/23-graphics-drivers-and-metal.md) | Current software/GPU paths, optional KosmicKrisp, driver comparison and remaining readback costs |
+| [Graphics pressure and driver settings](implementation/24-graphics-pressure-and-driver-settings.md) | Uncapped GLES/Vulkan measurements, direct GLES Metal prototype, retained driver choices and correctness gates |
+| [Direct GLES Metal correctness and pressure](implementation/25-direct-gles-metal-correctness.md) | Pinned source builds, topology/context/presentation fixes, host/guest regressions and controlled pressure comparison |
+| [Metal readback and completion tails](implementation/26-metal-readback-tail.md) | Display-readback tracing, bounded strip reads, packing regressions and isolated performance comparison |
+| [High refresh displays](implementation/27-high-refresh-displays.md) | 60/90/120 Hz configuration, frame notifications, guest and host delivery measurements |
 | [Direct Android Vulkan](implementation/08-native-vulkan.md) | Original NDK workload, Vulkan 1.3 checks, synchronization validation, independent displays and Metal/Software measurements |
 | [Vulkan frame pacing](implementation/09-vulkan-frame-pacing.md) | Perfetto and host frame markers distinguish swapchain queue backpressure from display interruption; corrected measurement scope |
 | [Asynchronous block I/O plan](implementation/10-async-block-io-plan.md) | Follow-up VMM scheduling fix with ordering, persistence and reset gates; not implemented |
 | [Native UI and functional audit](implementation/11-native-ui-audit.md) | Prototype comparison, real native interactions, task-lifecycle repair, guest regressions and measured workspace cleanup |
 | [Upstream and frame performance](implementation/12-upstream-and-frame-performance.md) | November dependency audit, bounded BGRA presentation, host microbenchmark and prioritized runtime follow-up |
+| [Overall performance audit](implementation/22-performance-audit.md) | Measured provider/CPU/frame improvements, bounded observation channels, export parsing and remaining bottlenecks |
 | [VM networking and proxies](implementation/13-vm-network-and-proxy-plan.md) | Implemented system proxy inventory; planned VM-wide proxy enforcement, DNS/UDP coverage and network memory budgets |
 | [Google services and notifications](implementation/14-google-services-and-notifications.md) | Live GMS prerequisites, isolated optional-install candidate, notification coverage fix and separate sign-in/FCM/native acceptance gates |
 | [Google services product workflow](implementation/15-google-services-product-and-system-notifications.md) | Transactional optional installation, removal/recovery and Android system notification delivery |
 | [Source review](implementation/16-source-review.md) | Review corrections, submission checks and explicit validation boundaries |
 | [Host files, downloads and clipboard](implementation/17-host-files-and-clipboard-plan.md) | Implemented Developer-image file selection, URI delivery, download export and clipboard bridges; guest evidence and native acceptance boundaries |
 | [Touch and trackpad input](implementation/18-touch-and-trackpad-input.md) | Touch coordinate/release accuracy, native scroll/pinch/rotation, game-input limits and real Android gesture recognition |
+| [macOS menu bar](implementation/21-macos-menu-bar.md) | Window-independent VM monitoring, measured host process resources, app switching and native acceptance boundaries |
+| [Adaptive memory and background runtime](implementation/adaptive-background-runtime.md) | Smart start/stop, persistent background ownership, guest-aware reclamation, measured lifecycle results and remaining GMS acceptance |
+| [Resident memory audit](implementation/resident-memory-audit.md) | Host/guest alias accounting, real backing measurements, controlled optimization experiments and bounded idle compaction |
+| [Optional Google services and minimal apps](implementation/optional-google-and-minimal-apps.md) | Data-preserving GMS off/on, transactional reinstall, reversible built-in app trimming and real VM acceptance |
+| [Location and network modes](implementation/location-and-network-modes.md) | Mac and virtual GPS sources, Shared/Bridged attachment, engine adaptation and explicit permission/runtime acceptance gates |
 | [Icon Composer reconstruction](design/icon-composer/README.md) | Selected B design rebuilt as editable vector layers, clean background, appearance previews and development bundle verification |
 
 ## Open the prototype

@@ -4,6 +4,8 @@ Date: 2026-11-05. Status: **system proxy inventory implemented; VM proxy forward
 
 ## Current implementation
 
+Update, 2026-11-08: [Shared/Bridged attachment](location-and-network-modes.md) now has a separate development implementation. It does not implement the HTTP/SOCKS/PAC enforcement plan below. Successful bridged LAN delivery remains gated on an authorized vmnet runtime and real network acceptance.
+
 The pinned Avo VMM (`99153258763a9ccdf5d4c6de36bd631e4dd0dded`) implements IPv4 user-mode networking in `engine/hvf/vmm/src/net.rs`. Guest TCP terminates in smoltcp and continues over host TCP sockets; UDP uses host datagram sockets, and ICMP echo uses an unprivileged host ICMP socket. These sockets use the host's applicable routing/firewall policies, including VPN/TUN routes that actually cover the VMM process and destination. This is not evidence that a particular VPN captures the VM's traffic.
 
 The VMM does not read CFNetwork proxy preferences or perform HTTP CONNECT/SOCKS handshakes. Setting macOS's HTTP, HTTPS or SOCKS proxy therefore does not automatically proxy the guest. `HTTP_PROXY`/`HTTPS_PROXY` environment variables do not change the VMM's raw socket behavior either. Setting Android's HTTP proxy would cover cooperating HTTP clients; it is insufficient for arbitrary native sockets, games, UDP or QUIC.

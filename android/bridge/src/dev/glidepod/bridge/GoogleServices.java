@@ -6,11 +6,26 @@ import android.os.Build;
 import java.security.MessageDigest;
 import org.json.*;
 
-/** Local prerequisites only. Never reads accounts, device IDs or messaging tokens. */
+/** Local inventory and controlled enable/disable. Never reads accounts, device IDs or messaging tokens. */
 public final class GoogleServices {
     public static void main(String[] args) throws Exception {
         Context context = Management.context();
         PackageManager pm = context.getPackageManager();
+        if (args.length != 0) {
+            if (args.length != 1 || !(args[0].equals("enable") || args[0].equals("disable")))
+                throw new IllegalArgumentException("Expected enable or disable");
+            // Called as root only inside GlidePod's recoverable maintenance candidate.
+            // SYNCHRONOUS is essential: the candidate reboots immediately after this call.
+            for (String name : new String[]{"com.google.android.gms", "com.google.android.gsf", "com.android.vending",
+                    "com.google.android.partnersetup", "com.google.android.feedback"}) {
+                try {
+                    pm.getApplicationInfo(name, 0);
+                    pm.setApplicationEnabledSetting(name, args[0].equals("enable")
+                        ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                        : PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER, PackageManager.SYNCHRONOUS);
+                } catch (PackageManager.NameNotFoundException absent) { }
+            }
+        }
         JSONArray packages = new JSONArray();
         for (String name : new String[]{"com.google.android.gms", "com.google.android.gsf", "com.android.vending"}) {
             JSONObject item = new JSONObject().put("package_id", name).put("installed", false)

@@ -226,12 +226,15 @@ fn independent_render_and_device_input() -> Result<()> {
     let ea = events(&a)?;
     let eb = events(&b)?;
     let renderer = store.runtime_status()?.effective_renderer;
-    let out = root
-        .join("evidence/g3")
-        .join(if renderer == Some(glidepod_core::Renderer::Metal) {
-            "metal-input"
-        } else {
-            "software-input"
+    let out = std::env::var_os("GLIDEPOD_TEST_EVIDENCE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            root.join("evidence/g3")
+                .join(if renderer == Some(glidepod_core::Renderer::Metal) {
+                    "metal-input"
+                } else {
+                    "software-input"
+                })
         });
     fs::create_dir_all(&out)?;
     fs::write(out.join("a-events.json"), serde_json::to_vec_pretty(&ea)?)?;

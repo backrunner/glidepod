@@ -359,12 +359,14 @@ impl Adb {
         let mut total = 0u64;
         let deadline = Instant::now() + Duration::from_secs(1800);
         loop {
-            while pending.len() >= 8 {
-                let id = &pending[..4];
-                let n = u32::from_le_bytes(pending[4..8].try_into().unwrap()) as usize;
+            let mut consumed = 0;
+            while pending.len() - consumed >= 8 {
+                let record = &pending[consumed..];
+                let id = &record[..4];
+                let n = u32::from_le_bytes(record[4..8].try_into().unwrap()) as usize;
                 if id == b"DONE" {
                     ensure!(
-                        total == size && pending.len() == 8,
+                        total == size && record.len() == 8,
                         "Truncated or trailing Android export"
                     );
                     return Ok(());
@@ -373,20 +375,20 @@ impl Adb {
                     n <= 65536 && (id == b"DATA" || id == b"FAIL"),
                     "Invalid Android export record"
                 );
-                if pending.len() < 8 + n {
+                if record.len() < 8 + n {
                     break;
                 }
-                ensure!(
-                    &pending[..4] != b"FAIL",
-                    "Android could not read the export snapshot"
-                );
+                ensure!(id != b"FAIL", "Android could not read the export snapshot");
                 total = total
                     .checked_add(n as u64)
                     .context("Export size overflow")?;
                 ensure!(total <= size, "Android export exceeded expected size");
-                output.write_all(&pending[8..8 + n])?;
-                pending.drain(..8 + n);
+                output.write_all(&record[8..8 + n])?;
+                consumed += 8 + n;
             }
+            // Compact only the incomplete tail once per ADB packet. Draining each
+            // 64 KiB record repeatedly moved the remainder of a 1 MiB packet.
+            pending.drain(..consumed);
             stream.renew_timeout(
                 Duration::from_secs(180).min(
                     deadline
@@ -450,6 +452,98 @@ pub fn quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn pull_reply(bytes: Vec<u8>, packet_size: usize, expected_size: u64) -> (Result<()>, Vec<u8>) {
+        use std::{os::unix::net::UnixListener, thread};
+        let directory = tempfile::Builder::new()
+            .prefix("gp-pull-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let path = directory.path().join("sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || -> Result<()> {
+            let (mut socket, _) = listener.accept()?;
+            socket.set_read_timeout(Some(Duration::from_secs(5)))?;
+            let mut hello = [0; 13];
+            socket.read_exact(&mut hello)?;
+            ensure!(&hello == b"CONNECT 6520\n", "Wrong vsock service");
+            socket.write_all(b"OK 6520\n")?;
+            let mut t = Transport {
+                socket,
+                deadline: Instant::now() + Duration::from_secs(5),
+            };
+            ensure!(t.read()?.command == code(b"CNXN"), "Missing connect");
+            t.write(b"CNXN", 0x01000001, MAX_PACKET as u32, b"device::\0")?;
+            ensure!(t.read()?.data == b"sync:\0", "Wrong ADB service");
+            t.write(b"OKAY", 7, 1, &[])?;
+            ensure!(t.read()?.data.starts_with(b"RECV"), "Missing pull request");
+            t.write(b"OKAY", 7, 1, &[])?;
+            for chunk in bytes.chunks(packet_size) {
+                t.write(b"WRTE", 7, 1, chunk)?;
+                ensure!(t.read()?.command == code(b"OKAY"), "Missing acknowledgment");
+            }
+            let _ = t.write(b"CLSE", 7, 1, &[]);
+            Ok(())
+        });
+        let mut output = tempfile::tempfile().unwrap();
+        let result = Adb::pull(
+            &path,
+            "/data/local/tmp/glidepod/export-test.bin",
+            &mut output,
+            expected_size,
+        );
+        let server_result = server.join().expect("Mock pull server panicked");
+        // Failed transfers close early; the mock may observe their intentional EOF.
+        if result.is_ok() {
+            server_result.unwrap();
+        }
+        use std::io::{Seek, SeekFrom};
+        output.seek(SeekFrom::Start(0)).unwrap();
+        let mut written = Vec::new();
+        output.read_to_end(&mut written).unwrap();
+        (result, written)
+    }
+    fn sync_data(data: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for record in data.chunks(65536) {
+            bytes.extend(b"DATA");
+            bytes.extend((record.len() as u32).to_le_bytes());
+            bytes.extend(record);
+        }
+        bytes.extend(b"DONE\0\0\0\0");
+        bytes
+    }
+    #[test]
+    fn pull_preserves_fragmented_headers_records_and_batched_packets() {
+        for (size, packet) in [
+            (0, 1),
+            (23, 1),
+            (103, 7),
+            (150_019, 4095),
+            (2_097_169, MAX_PACKET),
+        ] {
+            let expected: Vec<_> = (0..size).map(|n| (n % 251) as u8).collect();
+            let (result, written) = pull_reply(sync_data(&expected), packet, size as u64);
+            result.unwrap();
+            assert_eq!(written, expected);
+        }
+    }
+    #[test]
+    fn pull_rejects_truncation_oversize_failure_and_trailing_data() {
+        let valid = sync_data(b"abc");
+        let mut trailing = valid.clone();
+        trailing.push(1);
+        for (bytes, expected) in [
+            (valid[..10].to_vec(), 3),
+            (valid.clone(), 4),
+            (valid, 2),
+            (trailing, 3),
+            (b"DATA\x01\x00\x01\x00".to_vec(), 65537),
+            (b"FAIL\x03\0\0\0bad".to_vec(), 0),
+        ] {
+            assert!(pull_reply(bytes, MAX_PACKET, expected).0.is_err());
+        }
+    }
+
     #[test]
     fn file_transfer_preserves_bytes_and_fits_each_sync_record_in_one_packet() -> Result<()> {
         use std::{fs, os::unix::net::UnixListener, thread};

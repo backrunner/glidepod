@@ -1,0 +1,50 @@
+diff --git a/src/libANGLE/renderer/metal/FrameBufferMtl.mm b/src/libANGLE/renderer/metal/FrameBufferMtl.mm
+index 5489f53..304e381 100644
+--- a/src/libANGLE/renderer/metal/FrameBufferMtl.mm
++++ b/src/libANGLE/renderer/metal/FrameBufferMtl.mm
+@@ -1723,20 +1723,38 @@ void RoundValueAndAdjustCorrespondingValue(float a,
+     // Verify that prior command buffers affecting this texture completed without GPU faults.
+     ANGLE_TRY(contextMtl->checkCommandBufferError());
+ 
+-    angle::MemoryBuffer readPixelRowBuffer;
++    angle::MemoryBuffer readPixelBuffer;
+     auto checkedRowPitch = angle::CheckedNumeric<size_t>(area.width) * readAngleFormat.pixelBytes;
+     ANGLE_CHECK_GL_MATH(contextMtl, checkedRowPitch.IsValid());
+     size_t bufferRowPitch = checkedRowPitch.ValueOrDie();
+-    ANGLE_CHECK_GL_ALLOC(contextMtl, readPixelRowBuffer.resize(bufferRowPitch));
++    // Metal getBytes may decompress texture tiles on the CPU. Calling it once
++    // per row repeats that work and stalls other users of the graphics transport.
++    // Read bounded strips while retaining the existing conversion/packing path.
++    constexpr size_t kReadbackChunkBytes = 1024 * 1024;
++    int rowsPerChunk = static_cast<int>(std::min<size_t>(
++        area.height, std::max<size_t>(1, kReadbackChunkBytes / bufferRowPitch)));
++    auto checkedBufferSize = checkedRowPitch * rowsPerChunk;
++    ANGLE_CHECK_GL_MATH(contextMtl, checkedBufferSize.IsValid());
++    ANGLE_CHECK_GL_ALLOC(contextMtl, readPixelBuffer.resize(checkedBufferSize.ValueOrDie()));
++    int cachedStartRow = -1;
+     return readPixelsCopyImpl(
+         context, area, packPixelsParams, renderTarget,
+         [&](const gl::Rectangle &region, const uint8_t *&src) {
+-            // Read the pixels data to the row buffer
+             ASSERT(region.height == 1);
+-            ANGLE_TRY(mtl::ReadTexturePerSliceBytes(
+-                context, texture, bufferRowPitch, region, renderTarget->getLevelIndex(),
+-                renderTarget->getLayerIndex(), readPixelRowBuffer.span()));
+-            src = readPixelRowBuffer.data();
++            int relativeRow = region.y - area.y;
++            int firstRow = (relativeRow / rowsPerChunk) * rowsPerChunk;
++            if (cachedStartRow != firstRow)
++            {
++                gl::Rectangle strip(area.x, area.y + firstRow, area.width,
++                    std::min(rowsPerChunk, area.height - firstRow));
++                ANGLE_TRY(mtl::ReadTexturePerSliceBytes(
++                    context, texture, bufferRowPitch, strip, renderTarget->getLevelIndex(),
++                    renderTarget->getLayerIndex(),
++                    readPixelBuffer.span().first(bufferRowPitch * strip.height)));
++                cachedStartRow = firstRow;
++            }
++            src = ANGLE_UNSAFE_TODO(readPixelBuffer.data() +
++                                   (relativeRow - cachedStartRow) * bufferRowPitch);
+             return angle::Result::Continue;
+         },
+         pixels);

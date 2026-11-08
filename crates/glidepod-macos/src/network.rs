@@ -2,6 +2,27 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+/// Read-only physical interfaces eligible for Apple's bridged mode.
+pub fn bridge_interfaces() -> Result<Vec<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::{CStr, c_char};
+        unsafe extern "C" {
+            fn glidepod_bridge_interfaces() -> *mut c_char;
+            fn glidepod_system_proxy_snapshot_free(pointer: *mut c_char);
+        }
+        let pointer = unsafe { glidepod_bridge_interfaces() };
+        anyhow::ensure!(!pointer.is_null(), "Could not read bridge interfaces");
+        let result = serde_json::from_slice(unsafe { CStr::from_ptr(pointer) }.to_bytes());
+        unsafe {
+            glidepod_system_proxy_snapshot_free(pointer);
+        }
+        Ok(result?)
+    }
+    #[cfg(not(target_os = "macos"))]
+    anyhow::bail!("Bridge discovery requires macOS")
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProxyEndpoint {
     pub enabled: bool,

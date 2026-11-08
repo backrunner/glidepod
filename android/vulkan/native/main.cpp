@@ -12,6 +12,7 @@
 #include <functional>
 #include <jni.h>
 #include <mutex>
+#include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1043,6 +1044,83 @@ class Workload {
     complete();
     return read(output);
   }
+  void stress(int objects, int width, int height, int seconds) {
+    require(objects >= 1 && objects <= 4096 && width >= 320 && width <= 2048 &&
+                height >= 320 && height <= 2048 && seconds >= 1 && seconds <= 120,
+            "Invalid Vulkan pressure bounds");
+    auto pass = renderPass(VK_FORMAT_R8G8B8A8_UNORM);
+    auto pipe = pipeline(pass, true);
+    Image target = image(width, height, VK_FORMAT_R8G8B8A8_UNORM,
+                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                             VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    auto fb = framebuffer(pass, target.view, width, height);
+    auto frame = [&] {
+      begin();
+      render(pass, fb, pipe, width, height, objects, 0, true);
+      submit();
+      complete();
+    };
+    auto warm = Clock::now();
+    do { frame(); } while (ms(Clock::now() - warm) < 2000);
+    std::vector<double> timings;
+    timings.reserve(65536);
+    auto started = Clock::now();
+    do {
+      auto start = Clock::now();
+      frame();
+      timings.push_back(ms(Clock::now() - start));
+      require(timings.size() < 1000000, "Vulkan pressure sample bound exceeded");
+    } while (ms(Clock::now() - started) < seconds * 1000.0);
+    const double measured = ms(Clock::now() - started);
+    Buffer output = buffer(size_t(width) * height * 4,
+                           VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+    begin();
+    barrier(target.handle, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT);
+    VkBufferImageCopy copy{};
+    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.imageExtent = {uint32_t(width), uint32_t(height), 1};
+    vkCmdCopyImageToBuffer(command, target.handle,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output.handle, 1, &copy);
+    bufferBarrier(output, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT);
+    submit(); complete();
+    auto pixels = read(output);
+    uint64_t hash = 14695981039346656037ULL;
+    size_t colored = 0;
+    for (auto byte : pixels) { hash ^= byte; hash *= 1099511628211ULL; }
+    for (size_t i = 0; i < pixels.size(); i += 4)
+      if (pixels[i] > 40 || pixels[i + 1] > 40 || pixels[i + 2] > 40) colored++;
+    require(colored > size_t(width) * height / 100, "Empty Vulkan pressure scene");
+    size_t quarter = std::max<size_t>(1, timings.size() / 4);
+    report.num("first_quarter_mean_ms", std::accumulate(timings.begin(), timings.begin() + quarter, 0.0) / quarter);
+    report.num("last_quarter_mean_ms", std::accumulate(timings.end() - quarter, timings.end(), 0.0) / quarter);
+    Json stats;
+    stats.num("mean", std::accumulate(timings.begin(), timings.end(), 0.0) / timings.size());
+    std::sort(timings.begin(), timings.end());
+    for (auto entry : {std::pair<const char *, double>{"p50", .5}, {"p95", .95}, {"p99", .99}})
+      stats.num(entry.first, timings[size_t(std::ceil(entry.second * timings.size())) - 1]);
+    stats.num("max", timings.back());
+    report.raw("completion_ms", stats.dump());
+    report.num("frames", timings.size());
+    report.num("measured_ms", measured);
+    report.num("completed_frames_per_second", timings.size() * 1000.0 / measured);
+    report.num("width", width); report.num("height", height);
+    report.num("objects", objects); report.num("indices_per_object", indexCount);
+    report.num("seconds_requested", seconds); report.num("warmup_seconds", 2);
+    report.num("stress_colored_pixels", colored);
+    std::ostringstream hashText; hashText << std::hex << hash;
+    report.str("pixel_fnv1a64", hashText.str());
+    std::vector<int> probes;
+    for (int y = 1; y <= 7; y++) for (int x = 1; x <= 7; x++) for (int c = 0; c < 4; c++)
+      probes.push_back(pixels[(size_t(y * height / 8) * width + x * width / 8) * 4 + c]);
+    report.raw("pixel_probes", numbers(probes));
+    report.str("scope", "offscreen indexed Vulkan scene, command recording plus fence completion; no acquire, present or readback in timed loop");
+    passed("offscreen-pressure-completion-and-readback");
+  }
   void quadrants(const std::vector<uint8_t> &pixels) {
     const int positions[][2] = {{16, 16}, {48, 16}, {16, 48}, {48, 48}};
     const int colors[][4] = {{255, 0, 0, 255},
@@ -1451,7 +1529,8 @@ public:
   explicit Workload(Job &j) : job(j) {}
   ~Workload() { cleanup(); }
   std::string run(ANativeWindow *window, int objects, int samples,
-                  bool validation, bool inject, bool recreate, bool stages) {
+                  bool validation, bool inject, bool recreate, bool stages,
+                  int stressSeconds, int width, int height) {
     negative = inject;
     try {
       initialize(window, validation);
@@ -1459,7 +1538,8 @@ public:
       texture();
       mesh();
       pixelChecks();
-      frames(objects, samples, recreate, stages);
+      if (stressSeconds) stress(objects, width, height, stressSeconds);
+      else frames(objects, samples, recreate, stages);
     } catch (const std::exception &e) {
       report.str("error", e.what());
     }
@@ -1487,7 +1567,8 @@ public:
     report.flag("negative_control", negative);
     report.flag(
         "vk_success",
-        presented > 0 && validationErrors == 0 &&
+        (presented > 0 || (stressSeconds > 0 && !checks.empty() &&
+          checks.back() == quoted("offscreen-pressure-completion-and-readback"))) && validationErrors == 0 &&
             std::none_of(report.values.begin(), report.values.end(),
                          [](auto &pair) { return pair.first == "error"; }));
     return report.dump();
@@ -1511,13 +1592,15 @@ Java_dev_glidepod_vulkan_MainActivity_execute(JNIEnv *env, jclass, jlong id,
                                               jint samples, jboolean validation,
                                               jboolean negative,
                                               jboolean recreate,
-                                              jboolean stages) {
+                                              jboolean stages, jint stressSeconds,
+                                              jint width, jint height) {
   ANativeWindow *window = ANativeWindow_fromSurface(env, surface);
   if (!window)
     return env->NewStringUTF("{\"error\":\"Android surface is unavailable\"}");
   Workload w(*reinterpret_cast<Job *>(id));
   std::string result =
-      w.run(window, objects, samples, validation, negative, recreate, stages);
+      w.run(window, objects, samples, validation, negative, recreate, stages,
+            stressSeconds, width, height);
   ANativeWindow_release(window);
   return env->NewStringUTF(result.c_str());
 }

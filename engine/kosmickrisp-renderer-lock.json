@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "status": "evaluation-only-external-sdk-driver",
+  "sdk_version": "1.4.363.1",
+  "sdk_url": "https://sdk.lunarg.com/sdk/download/1.4.363.1/mac/vulkansdk-macos-1.4.363.1.zip",
+  "sdk_archive_sha256": "a65c707cf0a32bf8c2ca6b9af1985b7af61dbadfc19b352dae51a323f3a547a6",
+  "driver_file": "macOS/lib/libvulkan_kosmickrisp.dylib",
+  "driver_sha256": "45fd5cb16d4f5e77bbb6eb232ec141e6e6a77876e7bad3fb90615f6c92e34504",
+  "driver_info": "vulkan-sdk-1.4.363 (git-269a955c89)",
+  "sdk_notice_sha256": "03b9dd9957f288bc26ef39d188672d5a761f2f35c972d959b65c0f32cd4d576f",
+  "platform": "arm64-macos",
+  "minimum_macos": "26.0",
+  "redistribution_qualified": false,
+  "guest_conformance_qualified": false,
+  "games_qualified": false
+}

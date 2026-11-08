@@ -50,11 +50,14 @@ impl Center {
         for (_, handle) in self.windows.drain() {
             let _ = handle.update(cx, |_, w, _| w.remove_window());
         }
-        cx.global_mut::<AppSession>().owner.take();
         self.working = true;
         let store = self.store.clone();
         std::thread::spawn(move || {
             let result = (|| -> anyhow::Result<()> {
+                // Explicitly pause the background owner before system maintenance.
+                if store.runtime_status()?.active() {
+                    store.stop_background_vm()?;
+                }
                 if let Some(action) = action {
                     let helper = std::env::current_exe()?.with_file_name("glidepodctl");
                     store.manage_google_apps(&helper, action, &cancel, &mut |p: Progress| {
@@ -81,7 +84,11 @@ impl Center {
                         "Google services installed. Start Android and open Play Store to sign in."
                             .into()
                     } else if action == Some(Action::Remove) {
-                        "Google services removed.".into()
+                        "Google services removed. You can install them again at any time.".into()
+                    } else if action == Some(Action::Enable) {
+                        "Google services are on. Start Android to use them.".into()
+                    } else if action == Some(Action::Disable) {
+                        "Google services are off. Account and app data are preserved.".into()
                     } else {
                         "Android recovery completed.".into()
                     }
