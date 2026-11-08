@@ -84,7 +84,7 @@ impl Center {
                         "Google services installed. Start Android and open Play Store to sign in."
                             .into()
                     } else if action == Some(Action::Remove) {
-                        "Google services removed. You can install them again at any time.".into()
+                        "Google services removed.".into()
                     } else if action == Some(Action::Enable) {
                         "Google services are on. Start Android to use them.".into()
                     } else if action == Some(Action::Disable) {

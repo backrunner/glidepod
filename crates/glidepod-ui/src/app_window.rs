@@ -770,7 +770,7 @@ impl Render for AndroidWindow {
                     div()
                         .id("keyboard-mode")
                         .cursor_pointer()
-                        .hover(|s| s.text_color(rgb(0xffffff)))
+                        .hover(|s| s.text_color(rgb(colors.text)))
                         .child(if self.game_controls {
                             "Keys: Game"
                         } else {
@@ -787,7 +787,7 @@ impl Render for AndroidWindow {
                     div()
                         .id("pointer-mode")
                         .cursor_pointer()
-                        .hover(|s| s.text_color(rgb(0xffffff)))
+                        .hover(|s| s.text_color(rgb(colors.text)))
                         .child(if self.mouse_mode { "Mouse" } else { "Touch" })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.reset();
@@ -837,8 +837,9 @@ impl Render for AndroidWindow {
                         .text_color(rgb(0xf0bb93))
                         .overflow_hidden()
                         .flex()
+                        .items_center()
                         .gap(px(10.))
-                        .child(div().flex_1().min_w_0().overflow_hidden().child(e))
+                        .child(div().flex_1().min_w_0().text_ellipsis().child(e))
                         .when(self.files.can_retry(), |row| {
                             row.child(
                                 div()

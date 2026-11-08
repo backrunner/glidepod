@@ -274,6 +274,7 @@ impl RenderOnce for Button {
 pub(super) fn segmented(dark: bool) -> Div {
     div()
         .flex()
+        .flex_shrink_0()
         .items_center()
         .gap(px(2.))
         .p(px(2.))
@@ -319,8 +320,23 @@ impl Disableable for Switch {
 }
 impl RenderOnce for Switch {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let bg: Hsla = rgb(if self.checked { 0x4e775e } else { 0xd6ded4 }).into();
-        let border: Hsla = rgb(if self.checked { 0x4e775e } else { 0xccd5cc }).into();
+        let dark = cx.theme().mode.is_dark();
+        let bg: Hsla = rgb(if self.checked {
+            0x4e775e
+        } else if dark {
+            0x465149
+        } else {
+            0xd6ded4
+        })
+        .into();
+        let border: Hsla = rgb(if self.checked {
+            0x4e775e
+        } else if dark {
+            0x566359
+        } else {
+            0xccd5cc
+        })
+        .into();
         self.inner
             .custom(
                 ButtonCustomVariant::new(cx)

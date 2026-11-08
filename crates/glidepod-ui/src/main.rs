@@ -325,7 +325,7 @@ impl Center {
             gpus: store.gpu_registry().unwrap_or_default(),
             location_latitude,
             location_longitude,
-            location_message: "Location settings apply while Android is running.".into(),
+            location_message: String::new(),
             network_message: String::new(),
             bridge_interfaces: glidepod_macos::network::bridge_interfaces().unwrap_or_default(),
             google_revision: 0,
@@ -411,9 +411,7 @@ impl Center {
                 Work::Benchmark(result) => match result {
                     Ok(r) => {
                         self.benchmark = Some(*r);
-                        self.notice = Some(
-                            "3D check complete. Results exclude native window presentation.".into(),
-                        );
+                        self.notice = Some("Graphics check complete.".into());
                     }
                     Err(e) => self.notice = Some(e),
                 },
@@ -446,9 +444,7 @@ impl Center {
                                     && s.source == self.config.location.source
                             })
                             .map(|s| s.message)
-                            .unwrap_or_else(|| {
-                                "Location settings apply while Android is running.".into()
-                            });
+                            .unwrap_or_default();
                             if let VmState::Running { epoch } = status.vm
                                 && self.catalog_epoch != Some(epoch)
                             {

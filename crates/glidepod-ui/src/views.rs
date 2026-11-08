@@ -13,8 +13,13 @@ impl Center {
     fn caption(&self, text: impl Into<SharedString>) -> Div {
         div()
             .text_size(px(11.))
+            .line_height(px(16.))
             .text_color(rgb(palette(self.config.dark_mode).muted))
             .child(text.into())
+    }
+
+    fn hint(&self, text: impl Into<SharedString>) -> Div {
+        self.caption(text).pb(px(8.))
     }
 
     fn group(&self) -> Div {
@@ -34,7 +39,7 @@ impl Center {
 
     fn section(&self, title: &'static str, content: impl IntoElement) -> Div {
         self.card()
-            .p(px(18.))
+            .p(px(16.))
             .mb(px(16.))
             .child(
                 div()
@@ -49,11 +54,13 @@ impl Center {
 
     fn row(&self, label: &'static str, control: impl IntoElement) -> Div {
         div()
-            .py(px(14.))
+            .py(px(10.))
             .flex()
+            .flex_wrap()
             .items_center()
             .justify_between()
-            .gap(px(18.))
+            .gap_x(px(18.))
+            .gap_y(px(8.))
             .child(
                 div()
                     .flex_shrink_0()
@@ -134,7 +141,7 @@ impl Center {
                     self.empty(
                         "running",
                         "No apps running",
-                        "Open an app from your library or its Mac entry.",
+                        "Open an app from your library.",
                     )
                     .child(
                         button("open-library", "Open app library")
@@ -212,14 +219,16 @@ impl Center {
                 0x7c897f
             })))
             .child(
-                div().flex_1().min_w_0().h(px(30.)).child(
+                div().flex_1().min_w_0().flex().items_center().child(
                     Input::new(&self.search)
                         .appearance(false)
                         .cleanable(false)
                         .p_0()
                         .h(px(30.))
                         .text_size(px(12.))
-                        .line_height(px(18.)),
+                        // The editor sizes and paints its single line from this
+                        // value. Match the field height for text, caret and placeholder.
+                        .line_height(px(30.)),
                 ),
             )
             .when(self.query.is_empty(), |d| {
@@ -308,13 +317,13 @@ impl Center {
                                 "No apps installed"
                             },
                             if running_page {
-                                "Open an app from your library or its Mac entry."
+                                "Open an app from your library."
                             } else if !self.query.trim().is_empty() {
                                 "Try an app name or package name."
                             } else if self.filter == 2 {
                                 "Apps you open appear here."
                             } else {
-                                "Install an APK to add your first app to this profile."
+                                "Install an APK to get started."
                             },
                         )
                         .when(!self.query.is_empty(), |d| {
@@ -360,24 +369,13 @@ impl Center {
                                         }),
                                 )
                                 .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .child(
-                                            div()
-                                                .line_height(px(14.))
-                                                .font_weight(FontWeight(550.))
-                                                .text_ellipsis()
-                                                .child(app.label.clone()),
-                                        )
-                                        .child(
-                                            self.caption(if app.game {
-                                                "Games"
-                                            } else {
-                                                "Android app"
-                                            })
-                                            .mt(px(5.)),
-                                        ),
+                                    div().flex_1().min_w_0().child(
+                                        div()
+                                            .line_height(px(14.))
+                                            .font_weight(FontWeight(550.))
+                                            .text_ellipsis()
+                                            .child(app.label.clone()),
+                                    ),
                                 )
                                 .child(
                                     self.caption(if running {
@@ -493,9 +491,21 @@ impl Center {
         let open = package.clone();
         let remove = package.clone();
         let launcher = self.apps.iter().find(|a| a.package_id == package).cloned();
+        content = content
+            .child(
+                div()
+                    .text_size(px(19.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(d.label.clone()),
+            )
+            .child(
+                self.caption(format!("{} · {}", d.package_id, d.version))
+                    .mb(px(16.)),
+            );
         content = content.child(
             div()
                 .flex()
+                .flex_wrap()
                 .gap(px(8.))
                 .mb(px(18.))
                 .child(
@@ -524,31 +534,38 @@ impl Center {
                 }),
         );
         let background_package = package.clone();
-        content = content.child(self.section("Background", self.group()
-            .child(self.row("Keep available for messages and background work", Switch::new("app-background")
-                .checked(self.config.background_apps.contains(&package))
-                .on_click(cx.listener(move |this, enabled, _, cx| {
-                    let package = background_package.clone();
-                    this.update_settings(|c| { c.background_apps.retain(|p| p != &package); if *enabled { c.background_apps.push(package); } }, cx);
-                }))))
-            .child(self.caption("Keeps the shared Android runtime online even when this app has no open window. Turning this off does not force-stop the app.").px(px(14.)).pb(px(12.)))));
+        content = content.child(
+            self.section(
+                "Background",
+                self.group()
+                    .child(
+                        self.row(
+                            "Keep Android running",
+                            Switch::new("app-background")
+                                .checked(self.config.background_apps.contains(&package))
+                                .on_click(cx.listener(move |this, enabled, _, cx| {
+                                    let package = background_package.clone();
+                                    this.update_settings(
+                                        |c| {
+                                            c.background_apps.retain(|p| p != &package);
+                                            if *enabled {
+                                                c.background_apps.push(package);
+                                            }
+                                        },
+                                        cx,
+                                    );
+                                })),
+                        ),
+                    )
+                    .child(self.hint("Keep receiving messages after closing this app’s window.")),
+            ),
+        );
         let mutable = ready
             && !d.system
             && !d.shared_uid
             && !matches!(
                 package.as_str(),
                 "dev.glidepod.input" | "dev.glidepod.widgets" | "dev.glidepod.notifications"
-            );
-        content = content
-            .child(
-                div()
-                    .text_size(px(19.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(d.label.clone()),
-            )
-            .child(
-                self.caption(format!("{} · {}", d.package_id, d.version))
-                    .mb(px(22.)),
             );
         let mut storage = self.group();
         if let Some(s) = &d.storage {
@@ -569,18 +586,18 @@ impl Center {
                         .clone()
                         .unwrap_or_else(|| "Storage statistics unavailable".into()),
                 )
-                .p(px(14.)),
+                .pb(px(8.)),
             );
         }
         let cache = package.clone();
         let data = package.clone();
         storage = storage.child(
             div()
-                .p(px(12.))
+                .py(px(12.))
                 .flex()
                 .gap(px(8.))
                 .child(
-                    button("clear-app-cache", "Clear Cache")
+                    button("clear-app-cache", "Clear cache")
                         .disabled(!mutable)
                         .on_click(cx.listener(move |this, _, w, cx| {
                             this.clear_storage(
@@ -592,7 +609,7 @@ impl Center {
                         })),
                 )
                 .child(
-                    button("clear-app-data", "Clear Data…")
+                    button("clear-app-data", "Clear data…")
                         .disabled(!mutable)
                         .on_click(cx.listener(move |this, _, w, cx| {
                             this.clear_storage(
@@ -604,7 +621,10 @@ impl Center {
                         })),
                 ),
         );
-        content=content.child(self.section("Storage",storage)).child(self.caption("Android-reported sizes. Clearing files does not shrink the Mac VM disk automatically.").mt(px(-12.)).mb(px(20.)));
+        content = content.child(self.section(
+            "Storage",
+            storage.child(self.hint("Clearing Android files does not shrink the Mac disk image.")),
+        ));
         let permissions = self
             .group()
             .children(d.permissions.iter().enumerate().map(|(i, p)| {
@@ -613,7 +633,7 @@ impl Center {
                 let grant = !p.granted;
                 div().when(i > 0, |v| v.child(self.divider())).child(
                     div()
-                        .p(px(14.))
+                        .py(px(10.))
                         .flex()
                         .gap(px(12.))
                         .items_center()
@@ -640,11 +660,11 @@ impl Center {
                 )
             }))
             .when(d.permissions.is_empty(), |v| {
-                v.child(self.caption("No runtime permissions requested.").p(px(14.)))
+                v.child(self.hint("No permissions requested."))
             });
-        content.child(self.section("Permissions",permissions))
-            .child(self.caption("Changes apply inside Android. Camera, microphone and location are not available in this build. Use Android Settings for notification channels and special access."))
-            .when(d.shared_uid,|v|v.child(self.caption("This app shares its Android identity. Sizes may include other packages; manage it in Android Settings.").mt(px(12.))))
+        content.child(self.section("Permissions", permissions
+            .child(self.hint("Camera and microphone are unavailable. Manage special access in Android Settings."))
+            .when(d.shared_uid, |v| v.child(self.hint("Shared Android identity. Manage storage in Android Settings.")))))
             .into_any_element()
     }
 
@@ -687,6 +707,7 @@ impl Center {
         );
         let memory = div()
             .flex()
+            .flex_wrap()
             .gap(px(8.))
             .items_center()
             .child(
@@ -745,9 +766,9 @@ impl Center {
                     button(
                         "register-runtime",
                         if self.runtime.configured {
-                            "Replace Runtime…"
+                            "Replace runtime…"
                         } else {
-                            "Register Runtime…"
+                            "Register runtime…"
                         },
                     )
                     .disabled(self.working || self.runtime.active())
@@ -758,7 +779,7 @@ impl Center {
             .child(
                 self.row(
                     "Image",
-                    button("verify-image", "Verify Image…")
+                    button("verify-image", "Verify image…")
                         .disabled(self.working)
                         .on_click(cx.listener(|this, _, _, cx| this.choose_image(cx))),
                 ),
@@ -768,56 +789,87 @@ impl Center {
             .child(self.row("Profile", profiles))
             .child(self.divider())
             .child(self.row("Memory", memory))
-            .child(self.caption("Automatic returns unused memory to your Mac and keeps room for Android services. The memory ceiling applies at the next start. An updated runtime is required.").px(px(14.)).pb(px(12.)))
+            .child(self.hint("Automatic returns unused memory to your Mac."))
             .child(self.divider())
-            .child(self.row("Processors", cpus));
+            .child(self.row("Processors", cpus))
+            .child(self.hint("Saved per profile. Changes apply at the next start."));
         div()
             .w_full()
-
-            .child(self.section("Runtime", runtime))
+            .child(self.section(
+                "Runtime",
+                runtime.when(!self.runtime.message.is_empty(), |d| {
+                    d.child(self.hint(self.runtime.message.clone()))
+                }),
+            ))
             .child(
-                self.caption(self.runtime.message.clone())
-                    .mt(px(-12.))
-                    .mb(px(24.)),
-            )
-            .child(self.section("Storage",self.group()
-                .child(self.row("Android data volume",button("refresh-storage","Refresh").disabled(self.working || !matches!(self.runtime.vm,VmState::Running{..})).on_click(cx.listener(|this,_,_,cx|this.load_storage(cx)))))
-                .children(self.storage.as_ref().map(|s|self.caption(format!("{} available of {}",super::management_ui::bytes(s.available_bytes),super::management_ui::bytes(s.total_bytes))).px(px(14.)).pb(px(12.))))))
-            .child(self.section("Resources", resources))
-            .child(
-                self.caption("Saved separately for each profile. Changes apply at the next start.")
-                    .mt(px(-12.)),
-            )
-            .child(
-                div().mt(px(24.)).child(
-                    self.section(
-                        "Developer access",
-                        self.group()
-                            .child(self.row(
-                                "Guest root",
-                                self.caption(if self.runtime.effective_root {
-                                    "Verified · userdebug console"
-                                } else if self.runtime.active() {
-                                    "Waiting for verification"
-                                } else {
-                                    "Built into the experimental image"
-                                }),
+                self.section(
+                    "Storage",
+                    self.group()
+                        .child(
+                            self.row(
+                                "Android data volume",
+                                button("refresh-storage", "Refresh")
+                                    .disabled(
+                                        self.working
+                                            || !matches!(self.runtime.vm, VmState::Running { .. }),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| this.load_storage(cx))),
+                            ),
+                        )
+                        .children(self.storage.as_ref().map(|s| {
+                            self.hint(format!(
+                                "{} available of {}",
+                                super::management_ui::bytes(s.available_bytes),
+                                super::management_ui::bytes(s.total_bytes)
                             ))
-                            .child(self.divider())
-                            .child(self.row("CLI root shortcut", button("root-commands", if self.config.developer.root_requested {"Enabled"} else {"Disabled"}).disabled(self.config.active_profile != ProfileId::Developer).on_click(cx.listener(|this,_,_,cx|this.update_settings(|c|c.developer.root_requested = !c.developer.root_requested,cx)))))
-                            .child(self.divider())
-                            .child(self.row(
-                                "Renderer",
-                                self.caption(match self.runtime.effective_renderer { Some(Renderer::Metal) => "Metal · experimental gfxstream", Some(_) => "Software · virtio-gpu 2D", None => "Not running" }),
-                            )),
-                    ),
+                        })),
                 ),
             )
+            .child(self.section("Resources", resources))
             .child(
-                self.caption(
-                    "Root commands apply to the guest only. Disabling commands does not remove su from this userdebug image.",
-                )
-                .mt(px(-12.)),
+                self.section(
+                    "Developer access",
+                    self.group()
+                        .child(self.row(
+                            "Guest root",
+                            self.caption(if self.runtime.effective_root {
+                                "Verified"
+                            } else if self.runtime.active() {
+                                "Waiting for verification"
+                            } else {
+                                "Included in this image"
+                            }),
+                        ))
+                        .child(self.divider())
+                        .child(
+                            self.row(
+                                "CLI root shortcut",
+                                button(
+                                    "root-commands",
+                                    if self.config.developer.root_requested {
+                                        "Enabled"
+                                    } else {
+                                        "Disabled"
+                                    },
+                                )
+                                .disabled(self.config.active_profile != ProfileId::Developer)
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.update_settings(
+                                            |c| {
+                                                c.developer.root_requested =
+                                                    !c.developer.root_requested
+                                            },
+                                            cx,
+                                        )
+                                    },
+                                )),
+                            ),
+                        )
+                        .child(self.hint(
+                            "Applies to Android only. Disabling the shortcut does not remove root.",
+                        )),
+                ),
             )
             .into_any_element()
     }
@@ -845,7 +897,7 @@ impl Center {
                         if self.working {
                             "Checking…"
                         } else {
-                            "Run Checks"
+                            "Run checks"
                         },
                     )
                     .disabled(self.working)
@@ -904,29 +956,30 @@ impl Center {
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .child(self.caption(if registered {
-                            "Registered"
-                        } else {
-                            "Not registered"
-                        }))
-                        .child(
-                            Button::new(("gpu-select", i))
-                                .label(if selected { "Selected" } else { "Use" })
-                                .small()
-                                .segment(selected)
-                                .disabled(
-                                    self.working
-                                        || self.runtime.active()
-                                        || !registered
-                                        || selected,
-                                )
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| this.select_gpu(driver, cx)),
-                                ),
-                        )
+                        .when(registered, |d| {
+                            d.child(
+                                Button::new(("gpu-select", i))
+                                    .label(if selected { "Selected" } else { "Use" })
+                                    .small()
+                                    .segment(selected)
+                                    .disabled(
+                                        self.working
+                                            || self.runtime.active()
+                                            || !registered
+                                            || selected,
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.select_gpu(driver, cx)
+                                    })),
+                            )
+                        })
                         .child(
                             Button::new(("gpu-register", i))
-                                .label("Register…")
+                                .label(if registered {
+                                    "Replace…"
+                                } else {
+                                    "Register…"
+                                })
                                 .small()
                                 .ghost()
                                 .disabled(
@@ -973,7 +1026,7 @@ impl Center {
                         ),
                     )
                     .when(self.show_diagnostics, |d| {
-                        d.child(self.caption(result.detail.clone()).px(px(14.)).pb(px(14.)))
+                        d.child(self.hint(result.detail.clone()))
                     })
             });
             self.section(
@@ -982,9 +1035,9 @@ impl Center {
                     button(
                         "diagnostic-details",
                         if self.show_diagnostics {
-                            "Hide Details"
+                            "Hide details"
                         } else {
-                            "Show Details"
+                            "Show details"
                         },
                     )
                     .ghost()
@@ -998,29 +1051,31 @@ impl Center {
         });
         div().w_full()
             .child(self.section("This Mac", host)).children(results)
-            .child(self.section("Android rendering", self.group().child(self.row("Preference", renderers))))
-            .child(self.section("Refresh rate", self.group()
-                .child(self.row("Currently using", self.caption(live_refresh_rate)))
+            .child(self.section("Rendering", self.group()
+                .child(self.row("Renderer", renderers))
                 .child(self.divider())
-                .child(self.row("Next start", refresh_rates))))
-            .child(self.caption("Restart Android to apply. Actual frame rate depends on the app and your Mac display.").mt(px(-12.)))
+                .child(self.row("Refresh rate", refresh_rates))
+                .when(matches!(self.runtime.vm, VmState::Running { .. }), |d| d.child(self.hint(format!("Running at {live_refresh_rate}"))))
+                .child(self.hint("Applies at the next start. Automatic uses Software."))))
             .child(self.section("Vulkan driver", self.group()
                 .child(self.row("Currently using", self.caption(current_driver)))
                 .child(self.divider())
                 .child(self.row("Next Metal start", self.caption(self.gpus.selected_driver.map(|d| d.label()).unwrap_or("Register a driver"))))
-                .child(self.divider()).children(driver_rows)))
-            .child(self.caption("Stop Android to switch drivers. KosmicKrisp requires Apple Silicon and macOS 26+. Automatic uses Software; driver selection applies to Metal.").mt(px(-12.)))
-            .child(self.section("Android 3D check",self.group()
-                .child(self.row("Textured 3D · 720 × 1080",div().flex().gap(px(8.))
-                    .child(button("benchmark-3d","Run 3D Check").disabled(self.working || !matches!(self.runtime.vm,VmState::Running{..})).on_click(cx.listener(|this,_,_,cx|this.run_benchmark(glidepod_runtime::benchmark::GraphicsApi::Gles,2,cx))))
-                    .child(button("benchmark-gles3","Check GLES 3").disabled(self.working || !matches!(self.runtime.vm,VmState::Running{..})).on_click(cx.listener(|this,_,_,cx|this.run_benchmark(glidepod_runtime::benchmark::GraphicsApi::Gles,3,cx))))))
-                .child(self.row("Direct Vulkan",button("benchmark-vulkan","Check Vulkan").disabled(self.working || !matches!(self.runtime.vm,VmState::Running{..})).on_click(cx.listener(|this,_,_,cx|this.run_benchmark(glidepod_runtime::benchmark::GraphicsApi::Vulkan,2,cx)))))
-                .children(self.benchmark.as_ref().map(|r|div().px(px(14.)).pb(px(12.))
-                    .child(self.caption(format!("Last check · {:?} · {:?} · {:.1} app frames/s · interval p95 {:.1} ms",r.request.api,r.renderer,r.mean_fps,r.frame_interval.p95_ms)))
-                    .child(self.caption(format!("{} objects · {} samples · {} × {}",r.request.objects,r.request.samples,r.request.width,r.request.height)))
-                    .child(self.caption(if r.request.api == glidepod_runtime::benchmark::GraphicsApi::Vulkan {"Vulkan pixels, compute, synchronization and presentation checks passed."} else if r.guest["gles3_probe"]["correctness"]["passed"] == true {"GLES 3 pixel and readback checks passed."} else if r.guest["gles3_probe"]["context_created"] == true {"GLES 3 is available; correctness checks have not passed."} else {"GLES 3 is unavailable on this renderer."}))
-                    .child(self.caption("App rendering and copied frames only; Mac display smoothness and game compatibility are not measured."))))))
-            .child(self.caption("Check GLES 3 and Vulkan independently; game compatibility is pending.").mt(px(-12.)))
+                .child(self.divider()).children(driver_rows)
+                .child(self.hint("Used by Metal. Stop Android to change drivers."))
+                .child(self.hint("KosmicKrisp requires Apple Silicon and macOS 26+."))))
+            .child(self.section("Graphics checks",self.group()
+                .child(self.row("Test API",div().flex().flex_wrap().gap(px(8.))
+                    .child(button("benchmark-3d","GLES 2").disabled(self.working || !matches!(self.runtime.vm,VmState::Running{..})).on_click(cx.listener(|this,_,_,cx|this.run_benchmark(glidepod_runtime::benchmark::GraphicsApi::Gles,2,cx))))
+                    .child(button("benchmark-gles3","GLES 3").disabled(self.working || !matches!(self.runtime.vm,VmState::Running{..})).on_click(cx.listener(|this,_,_,cx|this.run_benchmark(glidepod_runtime::benchmark::GraphicsApi::Gles,3,cx))))
+                    .child(button("benchmark-vulkan","Vulkan").disabled(self.working || !matches!(self.runtime.vm,VmState::Running{..})).on_click(cx.listener(|this,_,_,cx|this.run_benchmark(glidepod_runtime::benchmark::GraphicsApi::Vulkan,2,cx))))))
+                .children(self.benchmark.as_ref().map(|r|div()
+                    .child(self.row("Last result", self.caption(format!("{:.1} fps · p95 {:.1} ms",r.mean_fps,r.frame_interval.p95_ms))))
+                    .child(self.hint(if r.request.api == glidepod_runtime::benchmark::GraphicsApi::Vulkan {"Vulkan checks passed."} else if r.guest["gles3_probe"]["correctness"]["passed"] == true {"GLES 3 checks passed."} else if r.guest["gles3_probe"]["context_created"] == true {"GLES 3 available; correctness not verified."} else {"GLES 3 unavailable."}))
+                    .when(self.show_diagnostics, |d| d.child(self.hint(format!("{:?} · {:?} · {} objects · {} samples · {} × {}",r.request.api,r.renderer,r.request.objects,r.request.samples,r.request.width,r.request.height))))
+                    .child(button("benchmark-details", if self.show_diagnostics {"Hide details"} else {"Details"}).small().ghost().mb(px(8.))
+                        .on_click(cx.listener(|this,_,_,cx| {this.show_diagnostics = !this.show_diagnostics; cx.notify();})))))
+                .child(self.hint("Measures Android rendering, not Mac display FPS or game compatibility."))))
             .into_any_element()
     }
 
@@ -1085,7 +1140,7 @@ impl Center {
             );
         let runtime_modes = segmented(self.config.dark_mode).children(
             [
-                (glidepod_core::RuntimeMode::Automatic, "Smart start / stop"),
+                (glidepod_core::RuntimeMode::Automatic, "Automatic"),
                 (glidepod_core::RuntimeMode::Resident, "Always on"),
             ]
             .into_iter()
@@ -1151,11 +1206,13 @@ impl Center {
             .child(self.section("General", general))
             .child(self.section("Location", self.group()
                 .child(self.row("Source", location_source))
-                .child(self.caption(if self.config.location.source == glidepod_runtime::location::Source::Virtual { "Virtual location selected." } else { "Follow Mac requests macOS location permission. Android apps still need their own location permission." }).px(px(14.)).pb(px(8.)))
-                .child(div().flex().gap(px(8.)).px(px(14.)).pb(px(12.))
-                    .child(Input::new(&self.location_latitude).w(px(180.)))
-                    .child(Input::new(&self.location_longitude).w(px(180.)))
-                    .child(button("location-virtual", "Use virtual location").disabled(self.working)
+                .when(self.config.location.source == glidepod_runtime::location::Source::Host, |d| d.child(self.hint("Requires location permission on your Mac and in Android.")))
+                .child(div().flex().flex_wrap().items_center().gap(px(8.)).pb(px(12.))
+                    .child(Input::new(&self.location_latitude).w(px(140.)))
+                    .child(Input::new(&self.location_longitude).w(px(140.)))
+                    .child(button("location-virtual", "Use coordinates")
+                        .segment(self.config.location.source == glidepod_runtime::location::Source::Virtual)
+                        .disabled(self.working)
                         .on_click(cx.listener(|this, _, _, cx| {
                             let point = (|| -> anyhow::Result<glidepod_runtime::location::Point> {
                                 let point = glidepod_runtime::location::Point {
@@ -1169,33 +1226,32 @@ impl Center {
                                 Err(e) => { this.notice = Some(e.to_string()); cx.notify(); }
                             }
                         }))))
-                .child(self.caption(self.location_message.clone()).px(px(14.)).pb(px(12.)))))
+                .when(!self.location_message.is_empty(), |d| d.child(self.hint(self.location_message.clone())))))
             .child(self.section("Network", self.group()
-                .child(self.row("Next Android start", network_modes))
-                .child(self.caption(if let Some(network) = self.runtime.effective_network.as_ref().filter(|_| matches!(self.runtime.vm, VmState::Running { .. })) {
-                    format!("Active: {}", if network.mode == glidepod_runtime::network::Mode::Shared { "Shared with Mac".into() } else { format!("Bridged through {}", network.interface.as_deref().unwrap_or("—")) })
-                } else { "Android is stopped. The selected network applies on start.".into() }).px(px(14.)).pb(px(8.)))
-                .when(!self.network_message.is_empty(), |d| d.child(self.caption(self.network_message.clone()).px(px(14.)).pb(px(8.))))
-                .child(self.caption("Shared uses the Mac’s network routes. Bridged gives Android its own LAN connection and requires an updated runtime with macOS virtual-network authorization. System HTTP/SOCKS proxy settings are separate; a failed bridge never switches to Shared automatically.").px(px(14.)).pb(px(12.)))
-                .when(self.bridge_interfaces.is_empty(), |d| d.child(self.caption("No bridge-capable interface is currently available.").px(px(14.)).pb(px(12.))))))
+                .child(self.row("Mode", network_modes))
+                .children(self.runtime.effective_network.as_ref().filter(|_| matches!(self.runtime.vm, VmState::Running { .. })).map(|network| self.hint(
+                    format!("Active: {}", if network.mode == glidepod_runtime::network::Mode::Shared { "Shared with Mac".into() } else { format!("Bridge · {}", network.interface.as_deref().unwrap_or("—")) }))))
+                .when(!self.network_message.is_empty(), |d| d.child(self.hint(self.network_message.clone())))
+                .child(self.hint("Applies at the next start. Bridge requires macOS network authorization."))
+                .when(self.bridge_interfaces.is_empty(), |d| d.child(self.hint("No bridge interface available.")))))
             .child(self.section("Background runtime", self.group()
                 .child(self.row("Android", runtime_modes))
-                .child(self.caption(cx.global::<AppSession>().notifications.runtime.lock().unwrap().clone()).px(px(14.)).pb(px(12.)))
-                .child(self.caption("Smart mode stops Android after three idle minutes when no app needs it. Notifications, enabled Google services, background apps, playback and downloads keep it online. Always on keeps Android running after every window closes. Stop Android overrides either mode until the next app launch.").px(px(14.)).pb(px(12.)))))
+                .child(self.hint(cx.global::<AppSession>().notifications.runtime.lock().unwrap().clone()))
+                .child(self.hint(if self.config.runtime_mode == glidepod_core::RuntimeMode::Automatic {"Stops Android after 3 idle minutes unless an app or service needs it."} else {"Keeps Android running after all windows close."}))))
             .child(self.section("Built-in Android apps", self.group()
                 .child(self.row("Minimal built-in apps", Switch::new("minimal-builtin-apps")
                     .checked(self.config.minimal_builtin_apps).disabled(self.working)
+                    .tooltip("Disable Clock, Contacts, Phone, Messages, Calendar, Music and diagnostic apps. App data is kept.")
                     .on_click(cx.listener(|this,_,_,cx| { let minimal = !this.config.minimal_builtin_apps; this.update_settings(|c| c.minimal_builtin_apps = minimal, cx); }))))
-                .child(self.caption("Turns off Clock, Contacts, Phone, Messages, Calendar, Music and demo or diagnostic apps. App data is kept. Turn this off to restore their previous states. Applies at the next Android start.").px(px(14.)).pb(px(12.)))))
+                .child(self.hint("Disable unused built-in apps on next start. Data is kept; turn off to restore."))))
             .child(self.section("Google services",self.group()
-                .child(self.row("Google Play services",self.caption(if self.google_enabled {"On · sign-in available"} else if self.google_installed {"Off · data preserved"} else {"Not installed · optional"})))
-                .child(self.caption("For the Android 17 ARM64 Developer profile. Downloads 519 MiB from MindTheGapps. Android stops while a recoverable copy is prepared. Google account sign-in and device compatibility depend on Google.").px(px(14.)).pb(px(12.)))
-                .child(self.caption("Turn off Google services to stop Google background activity and push delivery while keeping account and app data. Turn them on again when needed, or remove them and reinstall later.").px(px(14.)).pb(px(12.)))
-                .child(div().flex().flex_wrap().gap(px(8.)).px(px(14.)).pb(px(12.))
-                    .when(self.google_installed,|d| d.child(button("google-toggle", if self.google_enabled {"Turn off Google services"} else {"Turn on Google services"})
+                .child(self.row("Google Play services",self.caption(if self.google_enabled {"On"} else if self.google_installed {"Off · data kept"} else {"Not installed"})))
+                .child(self.hint(if self.google_installed {"Turning off pauses Google notifications and keeps account data. Changes stop Android."} else {"Optional · 519 MiB from MindTheGapps · Developer profile. Setup stops Android."}))
+                .child(div().flex().flex_wrap().gap(px(8.)).pb(px(8.))
+                    .when(self.google_installed,|d| d.child(button("google-toggle", if self.google_enabled {"Turn off"} else {"Turn on"})
                         .disabled(self.working || self.google_recovery || self.config.active_profile!=ProfileId::Developer || !self.runtime.configured)
                         .on_click(cx.listener(|this,_,w,cx|this.manage_google(Some(if this.google_enabled {glidepod_runtime::google_apps::Action::Disable} else {glidepod_runtime::google_apps::Action::Enable}),w,cx)))))
-                    .child(button("google-install",if self.google_installed{"Remove Google services…"}else{"Install Google services"})
+                    .child(button("google-install",if self.google_installed{"Remove…"}else{"Install"})
                         .disabled(self.working || self.google_recovery || self.config.active_profile!=ProfileId::Developer || !self.runtime.configured)
                         .on_click(cx.listener(|this,_,w,cx|this.manage_google(Some(if this.google_installed{glidepod_runtime::google_apps::Action::Remove}else{glidepod_runtime::google_apps::Action::Install}),w,cx))))
                     .when(self.google_enabled,|d|d.child(button("google-open-store","Open Play Store").disabled(self.working || self.config.active_profile!=ProfileId::Developer).on_click(cx.listener(|this,_,_,cx|{
@@ -1204,11 +1260,11 @@ impl Center {
                     .when(self.google_recovery,|d|d.child(button("google-recover","Recover Android").disabled(self.working).on_click(cx.listener(|this,_,w,cx|this.manage_google(None,w,cx)))))
                     .when(cx.global::<AppSession>().google.lock().unwrap().busy,|d|d.child(button("google-cancel","Cancel").on_click(cx.listener(|this,_,_,cx|this.cancel_google(cx))))))))
             .child(self.section("Notifications",self.group()
-                .child(self.row("All Android notifications",Switch::new("notification-forwarding").checked(self.config.notifications_enabled).tooltip("All Android notifications")
+                .child(self.row("Show on Mac",Switch::new("notification-forwarding").checked(self.config.notifications_enabled).tooltip("Android notifications")
                     .disabled(self.working || (!self.config.notifications_enabled && !matches!(self.runtime.vm,VmState::Running{..})))
                     .on_click(cx.listener(|this,_,_,cx|this.toggle_notifications(cx)))))
-                .child(self.caption(cx.global::<AppSession>().notifications.status.lock().unwrap().clone()).px(px(14.)).pb(px(12.)))
-                .child(self.caption("Uses Android notification access and macOS notification permission. Includes system apps, ongoing notifications and groups. Private content stays hidden. Click follows the Android notification; dismissal only clears notifications Android allows to be dismissed.").px(px(14.)).pb(px(12.)))))
+                .child(self.hint(cx.global::<AppSession>().notifications.status.lock().unwrap().clone()))
+                .child(self.hint("Requires permission in Android and macOS. Private content stays hidden."))))
             .child(
                 self.section(
                     "About",
@@ -1218,7 +1274,6 @@ impl Center {
                         .child(self.row("License", self.caption("Apache-2.0"))),
                 ),
             )
-            .child(self.caption("Use Create Mac shortcut in an app’s details to add it to Applications. Native WidgetKit widgets are not available yet."))
             .into_any_element()
     }
 
@@ -1412,7 +1467,7 @@ impl Center {
                     } else if matches!(self.runtime.vm, VmState::Running { .. }) {
                         "Install"
                     } else {
-                        "Set Up Android…"
+                        "Set up Android…"
                     },
                 )
                 .disabled(self.working || !report.arm64_candidate)
@@ -1477,10 +1532,6 @@ impl Center {
                             ),
                     )
                     .child(div().mt(px(20.)).child(metadata))
-                    .child(
-                        self.caption("Android will verify the APK signature during installation.")
-                            .mt(px(12.)),
-                    )
                     .when(!report.arm64_candidate, |d| {
                         d.child(
                             self.caption("This APK has no ARM64 native libraries.")
@@ -1488,10 +1539,8 @@ impl Center {
                         )
                     })
                     .child(
-                        self.caption(
-                            "Updates preserve app data. Android rejects incompatible signatures.",
-                        )
-                        .mt(px(14.)),
+                        self.caption("Updates keep app data. Android verifies the APK signature.")
+                            .mt(px(14.)),
                     )
                     .children(
                         self.notice
@@ -1519,10 +1568,30 @@ impl Render for Center {
             Page::Graphics => self.graphics(cx),
             Page::Settings => self.settings(cx),
             Page::Running => self.apps(window, cx),
-            Page::Widgets => div().flex().flex_col().gap(px(12.))
-                .child(self.section("Android widgets",self.group().child(self.row("Live widget panel",button("open-widgets","Open Widgets").disabled(self.working || !matches!(self.runtime.vm,VmState::Running{..})).on_click(cx.listener(|this,_,_,cx|this.open_widgets(cx)))))))
-                .child(self.caption("Choose and configure installed widget providers in the panel. Android must stay running for live updates."))
-                .child(self.caption("Native WidgetKit desktop widgets are not available in this build."))
+            Page::Widgets => div()
+                .child(
+                    self.section(
+                        "Android widgets",
+                        self.group()
+                            .child(
+                                self.row(
+                                    "Widget panel",
+                                    button("open-widgets", "Open widgets")
+                                        .disabled(
+                                            self.working
+                                                || !matches!(
+                                                    self.runtime.vm,
+                                                    VmState::Running { .. }
+                                                ),
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.open_widgets(cx)),
+                                        ),
+                                ),
+                            )
+                            .child(self.hint("Android must stay running for live updates.")),
+                    ),
+                )
                 .into_any_element(),
         };
         div()
@@ -1570,46 +1639,17 @@ impl Render for Center {
                                 .pt(px(if compact { 24. } else { 26. }))
                                 .pb(px(30.))
                                 .child(
-                                    div()
-                                        .mb(px(23.))
-                                        .child(
-                                            div()
-                                                .text_size(px(22.))
-                                                .line_height(px(26.4))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child(if self.page == Page::Running {
-                                                    "Running apps"
-                                                } else {
-                                                    self.page.label()
-                                                }),
-                                        )
-                                        .child(
-                                            self.caption(match self.page {
-                                                Page::Apps => format!(
-                                                    "Installed in the {} profile.",
-                                                    self.config.active_profile.label()
-                                                ),
-                                                Page::Running => {
-                                                    "Manage open Android windows.".into()
-                                                }
-                                                Page::Android => {
-                                                    "Runtime, resources and developer access."
-                                                        .into()
-                                                }
-                                                Page::Graphics => {
-                                                    "Rendering, performance and compatibility."
-                                                        .into()
-                                                }
-                                                Page::Widgets => {
-                                                    "Android widgets on your Mac desktop.".into()
-                                                }
-                                                Page::Settings => {
-                                                    "Mac integration and preferences.".into()
-                                                }
-                                            })
-                                            .text_size(px(12.))
-                                            .mt(px(7.)),
-                                        ),
+                                    div().mb(px(20.)).child(
+                                        div()
+                                            .text_size(px(22.))
+                                            .line_height(px(26.4))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(if self.page == Page::Running {
+                                                "Running apps"
+                                            } else {
+                                                self.page.label()
+                                            }),
+                                    ),
                                 )
                                 .child(content),
                         )

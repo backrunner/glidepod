@@ -42,6 +42,7 @@ GlidePod brings Android applications onto the Mac as individual windows, with an
 | [Direct GLES Metal correctness and pressure](implementation/25-direct-gles-metal-correctness.md) | Pinned source builds, topology/context/presentation fixes, host/guest regressions and controlled pressure comparison |
 | [Metal readback and completion tails](implementation/26-metal-readback-tail.md) | Display-readback tracing, bounded strip reads, packing regressions and isolated performance comparison |
 | [High refresh displays](implementation/27-high-refresh-displays.md) | 60/90/120 Hz configuration, frame notifications, guest and host delivery measurements |
+| [UI density and search alignment](implementation/28-ui-density-and-search.md) | Compact copy and control spacing, centered search line layout, theme fixes and native verification limits |
 | [Direct Android Vulkan](implementation/08-native-vulkan.md) | Original NDK workload, Vulkan 1.3 checks, synchronization validation, independent displays and Metal/Software measurements |
 | [Vulkan frame pacing](implementation/09-vulkan-frame-pacing.md) | Perfetto and host frame markers distinguish swapchain queue backpressure from display interruption; corrected measurement scope |
 | [Asynchronous block I/O plan](implementation/10-async-block-io-plan.md) | Follow-up VMM scheduling fix with ordering, persistence and reset gates; not implemented |
