@@ -1,4 +1,4 @@
-//! Prototype-sized controls. Keep GPUI's focus/activation behavior while owning
+//! Shared macOS controls. Keep GPUI's focus/activation behavior while owning
 //! typography and state colors instead of inheriting component defaults.
 use gpui::{prelude::*, *};
 use gpui_component::{
@@ -26,7 +26,6 @@ pub(super) struct Button {
     label: Option<SharedString>,
     icon: Option<Icon>,
     icon_size: Option<Pixels>,
-    shortcut: Option<SharedString>,
     badge: Option<SharedString>,
 }
 
@@ -41,7 +40,6 @@ impl Button {
             label: None,
             icon: None,
             icon_size: None,
-            shortcut: None,
             badge: None,
         }
     }
@@ -59,10 +57,6 @@ impl Button {
     }
     pub fn badge(mut self, badge: impl Into<SharedString>) -> Self {
         self.badge = Some(badge.into());
-        self
-    }
-    pub fn shortcut(mut self, shortcut: impl Into<SharedString>) -> Self {
-        self.shortcut = Some(shortcut.into());
         self
     }
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
@@ -113,14 +107,14 @@ impl RenderOnce for Button {
         let transparent: Hsla = rgba(0).into();
         let mut bg: Hsla = rgb(p.panel).into();
         let mut fg: Hsla = rgb(p.text).into();
-        let mut border: Hsla = rgb(if dark { 0x4e5e51 } else { 0xcbd4cb }).into();
-        let mut hover: Hsla = rgb(if dark { 0x354438 } else { 0xf1f5ef }).into();
+        let mut border: Hsla = rgb(p.control_border).into();
+        let mut hover: Hsla = rgb(p.hover).into();
         let mut height = if self.small { 28. } else { 32. };
-        let mut font = if self.small { 11. } else { 12. };
+        let mut font = if self.small { 12. } else { 13. };
         let mut padding = if self.small { 9. } else { 11. };
         let mut icon_size = 16.;
         let mut gap = 6.;
-        let mut radius = 6.;
+        let mut radius = 8.;
         let mut selected = false;
         let mut weight = FontWeight::MEDIUM;
         match self.kind {
@@ -128,8 +122,8 @@ impl RenderOnce for Button {
             Kind::Primary => {
                 bg = rgb(p.accent).into();
                 border = bg;
-                fg = rgb(if dark { 0x192d20 } else { 0xffffff }).into();
-                hover = rgb(if dark { 0xb0c9b4 } else { 0x284e3e }).into();
+                fg = rgb(p.accent_text).into();
+                hover = rgb(p.accent_hover).into();
             }
             Kind::Ghost => {
                 bg = transparent;
@@ -139,7 +133,7 @@ impl RenderOnce for Button {
             Kind::Navigation(active) => {
                 selected = active;
                 height = 36.;
-                font = 12.;
+                font = 13.;
                 padding = 12.;
                 icon_size = 18.;
                 gap = 11.;
@@ -153,43 +147,29 @@ impl RenderOnce for Button {
                 } else {
                     transparent
                 };
-                fg = rgb(if active {
-                    if dark { 0xc5dbc6 } else { 0x2a4f3c }
-                } else if dark {
-                    0xacb8aa
-                } else {
-                    0x66756b
-                })
-                .into();
+                fg = rgb(p.text).into();
                 border = transparent;
-                hover = rgb(if dark { 0x303d32 } else { 0xe5ebe3 }).into();
+                hover = rgb(p.hover).into();
             }
             Kind::Segment(active) => {
                 selected = active;
                 height = 28.;
-                font = 11.;
+                font = 12.;
                 padding = 12.;
-                radius = 5.;
+                radius = 6.;
                 weight = if active {
                     FontWeight::MEDIUM
                 } else {
                     FontWeight::NORMAL
                 };
                 bg = if active {
-                    rgb(if dark { 0x405343 } else { p.panel }).into()
+                    rgb(p.panel).into()
                 } else {
                     transparent
                 };
-                fg = rgb(if active {
-                    if dark { 0xe2eadf } else { p.text }
-                } else if dark {
-                    0x9bac9b
-                } else {
-                    0x647165
-                })
-                .into();
+                fg = rgb(if active { p.text } else { p.muted }).into();
                 border = transparent;
-                hover = rgb(if dark { 0x324135 } else { 0xe1e8de }).into();
+                hover = rgb(p.hover).into();
             }
         }
         // Explicit child typography also avoids the dependency's red hover text.
@@ -223,16 +203,7 @@ impl RenderOnce for Button {
                     .text_size(px(10.))
                     .font_weight(FontWeight::NORMAL)
                     .text_color(rgb(p.muted))
-                    .opacity(0.75)
                     .child(badge)
-            }))
-            .children(self.shortcut.map(|shortcut| {
-                div()
-                    .ml(px(5.))
-                    .text_size(px(10.))
-                    .font_weight(FontWeight::NORMAL)
-                    .opacity(0.65)
-                    .child(shortcut)
             }));
         self.inner
             .custom(
@@ -257,7 +228,7 @@ impl RenderOnce for Button {
             })
             .when(matches!(self.kind, Kind::Segment(true)), |b| {
                 b.shadow(vec![BoxShadow {
-                    color: rgba(0x223c2918).into(),
+                    color: rgba(0x00000018).into(),
                     offset: point(px(0.), px(1.)),
                     blur_radius: px(3.),
                     spread_radius: px(0.),
@@ -272,6 +243,7 @@ impl RenderOnce for Button {
 }
 
 pub(super) fn segmented(dark: bool) -> Div {
+    let p = super::palette(dark);
     div()
         .flex()
         .flex_shrink_0()
@@ -279,9 +251,9 @@ pub(super) fn segmented(dark: bool) -> Div {
         .gap(px(2.))
         .p(px(2.))
         .border_1()
-        .rounded(px(7.))
-        .bg(rgb(if dark { 0x28342a } else { 0xe9eee7 }))
-        .border_color(rgb(if dark { 0x435045 } else { 0xdfe5dd }))
+        .rounded(px(8.))
+        .bg(rgb(p.side))
+        .border_color(rgb(p.line))
 }
 
 #[derive(IntoElement)]
@@ -321,22 +293,14 @@ impl Disableable for Switch {
 impl RenderOnce for Switch {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let dark = cx.theme().mode.is_dark();
+        let p = super::palette(dark);
         let bg: Hsla = rgb(if self.checked {
-            0x4e775e
-        } else if dark {
-            0x465149
+            p.accent
         } else {
-            0xd6ded4
+            p.control_border
         })
         .into();
-        let border: Hsla = rgb(if self.checked {
-            0x4e775e
-        } else if dark {
-            0x566359
-        } else {
-            0xccd5cc
-        })
-        .into();
+        let border = bg;
         self.inner
             .custom(
                 ButtonCustomVariant::new(cx)

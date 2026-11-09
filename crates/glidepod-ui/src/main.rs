@@ -73,11 +73,12 @@ impl Page {
 const PAGES: [Page; 6] = [
     Page::Apps,
     Page::Running,
+    Page::Widgets,
     Page::Android,
     Page::Graphics,
-    Page::Widgets,
     Page::Settings,
 ];
+// Shared semantic colors keep every control and surface consistent.
 #[derive(Clone, Copy)]
 struct Palette {
     bg: u32,
@@ -88,30 +89,52 @@ struct Palette {
     line: u32,
     selected: u32,
     accent: u32,
+    accent_hover: u32,
+    accent_text: u32,
+    control_border: u32,
+    hover: u32,
 }
 fn palette(dark: bool) -> Palette {
     if dark {
         Palette {
-            bg: 0x202923,
-            side: 0x242e27,
-            panel: 0x28322b,
-            text: 0xe0e7dd,
-            muted: 0x98a596,
-            line: 0x374239,
-            selected: 0x3a503e,
-            accent: 0x9ab9a1,
+            bg: 0x1c1c1e,
+            side: 0x252527,
+            panel: 0x2c2c2e,
+            text: 0xf2f2f7,
+            muted: 0xaeaeb6,
+            line: 0x3a3a3c,
+            selected: 0x3c4542,
+            accent: 0x9bcab4,
+            accent_hover: 0xb7dcc9,
+            accent_text: 0x162c22,
+            control_border: 0x535357,
+            hover: 0x3a3a3e,
         }
     } else {
         Palette {
-            bg: 0xfbfcfa,
-            side: 0xf0f3ef,
+            bg: 0xf6f6f8,
+            side: 0xeeeef0,
             panel: 0xffffff,
-            text: 0x24342e,
-            muted: 0x69776e,
-            line: 0xe0e6df,
-            selected: 0xdce7dc,
-            accent: 0x315e4b,
+            text: 0x202124,
+            muted: 0x66666e,
+            line: 0xe2e2e6,
+            selected: 0xdde8e2,
+            accent: 0x28634c,
+            accent_hover: 0x1c503b,
+            accent_text: 0xffffff,
+            control_border: 0xc9c9cf,
+            hover: 0xebebef,
         }
+    }
+}
+fn effective_dark(config: &Configuration, appearance: WindowAppearance) -> bool {
+    if config.follow_system_appearance {
+        matches!(
+            appearance,
+            WindowAppearance::Dark | WindowAppearance::VibrantDark
+        )
+    } else {
+        config.dark_mode
     }
 }
 fn apply_theme(dark: bool, cx: &mut App) {
@@ -126,21 +149,21 @@ fn apply_theme(dark: bool, cx: &mut App) {
     );
     let p = palette(dark);
     let theme = Theme::global_mut(cx);
-    theme.font_size = px(12.);
-    theme.radius = px(6.);
+    theme.font_size = px(13.);
+    theme.radius = px(8.);
     theme.shadow = false;
     theme.colors.background = rgb(p.panel).into();
     theme.colors.foreground = rgb(p.text).into();
-    theme.colors.input = rgb(p.line).into();
-    theme.colors.muted_foreground = rgb(if dark { 0x8c9e8e } else { 0x839087 }).into();
-    theme.colors.ring = rgb(0x709982).into();
+    theme.colors.input = rgb(p.control_border).into();
+    theme.colors.muted_foreground = rgb(p.muted).into();
+    theme.colors.ring = rgb(p.accent).into();
     theme.colors.primary = rgb(p.accent).into();
-    theme.colors.primary_hover = rgb(if dark { 0xb0c9b4 } else { 0x284e3e }).into();
+    theme.colors.primary_hover = rgb(p.accent_hover).into();
     theme.colors.primary_active = rgb(p.accent).into();
-    theme.colors.primary_foreground = rgb(if dark { 0x192d20 } else { 0xffffff }).into();
-    theme.colors.secondary = rgb(if dark { 0x373a37 } else { 0xf0f1ef }).into();
-    theme.colors.secondary_hover = rgb(if dark { 0x454945 } else { 0xe6e8e4 }).into();
-    theme.colors.secondary_active = rgb(if dark { 0x4d524d } else { 0xdde1da }).into();
+    theme.colors.primary_foreground = rgb(p.accent_text).into();
+    theme.colors.secondary = rgb(p.side).into();
+    theme.colors.secondary_hover = rgb(p.hover).into();
+    theme.colors.secondary_active = rgb(p.selected).into();
     theme.colors.secondary_foreground = rgb(p.text).into();
 }
 fn symbol(name: &str) -> Svg {
@@ -206,6 +229,7 @@ impl Global for AppSession {}
 struct Center {
     store: Store,
     config: Configuration,
+    dark: bool,
     host: HostReport,
     runtime: RuntimeStatus,
     gpus: glidepod_runtime::gpu::GpuRegistry,
@@ -258,7 +282,7 @@ impl Center {
         window.focus(&focus);
         let location_latitude = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Latitude · −90 to 90")
+                .placeholder("Latitude")
                 .default_value(
                     config
                         .location
@@ -270,7 +294,7 @@ impl Center {
         });
         let location_longitude = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Longitude · −180 to 180")
+                .placeholder("Longitude")
                 .default_value(
                     config
                         .location
@@ -356,6 +380,7 @@ impl Center {
             runtime_polling: false,
             runtime_revision: 0,
             last_runtime_poll: std::time::Instant::now(),
+            dark: effective_dark(&config, cx.window_appearance()),
             store,
             config,
             host: glidepod_macos::host_report(),
@@ -376,7 +401,16 @@ impl Center {
             _subscriptions: vec![subscription],
         }
     }
+    fn sync_appearance(&mut self, cx: &mut Context<Self>) {
+        let dark = effective_dark(&self.config, cx.window_appearance());
+        if dark != self.dark {
+            self.dark = dark;
+            apply_theme(dark, cx);
+            cx.notify();
+        }
+    }
     fn poll(&mut self, cx: &mut Context<Self>) {
+        self.sync_appearance(cx);
         while let Ok(work) = self.receiver.try_recv() {
             if !matches!(
                 &work,
@@ -1056,6 +1090,7 @@ impl Center {
         match self.store.update(self.config.revision, change) {
             Ok(c) => {
                 self.config = c;
+                self.sync_appearance(cx);
                 self.apps = self.store.cached_apps().unwrap_or_default();
             }
             Err(e) => self.notice = Some(e.to_string()),
@@ -1072,7 +1107,7 @@ impl Center {
         match self.store.load() {
             Ok(c) => {
                 self.config = c;
-                apply_theme(self.config.dark_mode, cx);
+                self.sync_appearance(cx);
                 self.notice = None;
             }
             Err(e) => self.notice = Some(e.to_string()),
@@ -1102,6 +1137,7 @@ impl Center {
             return;
         }
         if self.apk.take().is_some() {
+            window.focus(&self.focus);
             cx.notify();
             return;
         }
@@ -1163,7 +1199,7 @@ fn main() -> anyhow::Result<()> {
             notifications,
             google: Arc::new(Mutex::new(google_apps_ui::GoogleJob::default())),
         });
-        apply_theme(config.dark_mode, cx);
+        apply_theme(effective_dark(&config, cx.window_appearance()), cx);
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-w", CloseWindow, None),
@@ -1321,4 +1357,26 @@ fn quit_glidepod(cx: &mut App) {
         });
     })
     .detach();
+}
+
+#[cfg(test)]
+mod appearance_tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn follows_system_including_vibrant_appearances_only_when_selected() {
+        let mut config = Configuration::default();
+        for (appearance, expected) in [
+            (WindowAppearance::Light, false),
+            (WindowAppearance::VibrantLight, false),
+            (WindowAppearance::Dark, true),
+            (WindowAppearance::VibrantDark, true),
+        ] {
+            assert_eq!(effective_dark(&config, appearance), expected);
+            config.follow_system_appearance = false;
+            config.dark_mode = !expected;
+            assert_eq!(effective_dark(&config, appearance), !expected);
+            config.follow_system_appearance = true;
+        }
+    }
 }

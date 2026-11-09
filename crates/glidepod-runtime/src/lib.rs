@@ -42,6 +42,9 @@ pub struct Configuration {
     pub personal: ProfileSettings,
     pub developer: ProfileSettings,
     pub dark_mode: bool,
+    /// Missing on older stores: preserve their explicit Light/Dark choice.
+    #[serde(default)]
+    pub follow_system_appearance: bool,
     #[serde(default)]
     pub audio_enabled: bool,
     #[serde(default)]
@@ -71,6 +74,7 @@ impl Default for Configuration {
             personal: ProfileSettings::default(),
             developer: ProfileSettings::default(),
             dark_mode: false,
+            follow_system_appearance: true,
             audio_enabled: true,
             notifications_enabled: false,
             runtime_mode: glidepod_core::RuntimeMode::Automatic,
@@ -530,6 +534,26 @@ mod tests {
         assert_eq!(config.personal.memory_mib, personal_memory);
         assert_eq!(config.developer.memory_mib, 8192);
     }
+    #[test]
+    fn appearance_migration_preserves_explicit_choices() {
+        assert!(Configuration::default().follow_system_appearance);
+        for dark in [false, true] {
+            let mut legacy = serde_json::to_value(Configuration::default()).unwrap();
+            legacy
+                .as_object_mut()
+                .unwrap()
+                .remove("follow_system_appearance");
+            legacy["dark_mode"] = dark.into();
+            let config: Configuration = serde_json::from_value(legacy).unwrap();
+            assert!(!config.follow_system_appearance);
+            assert_eq!(config.dark_mode, dark);
+            let decoded: Configuration =
+                serde_json::from_slice(&serde_json::to_vec(&config).unwrap()).unwrap();
+            assert!(!decoded.follow_system_appearance);
+            assert_eq!(decoded.dark_mode, dark);
+        }
+    }
+
     #[test]
     fn stale_writer_cannot_erase_other_clients_settings() {
         let dir = tempfile::tempdir().unwrap();

@@ -593,9 +593,9 @@ impl Render for AndroidWindow {
             || self.files.error.is_some()
             || self.files.background_error.is_some()
         {
-            52.
+            60.
         } else {
-            28.
+            36.
         };
         let scale = (available.width / px(self.width as f32))
             .min((available.height - px(footer)) / px(self.height as f32))
@@ -618,7 +618,7 @@ impl Render for AndroidWindow {
                 cx.notify();
             }))
             .size_full()
-            .bg(rgb(0x151715))
+            .bg(rgb(0x171719))
             .flex()
             .flex_col()
             .items_center()
@@ -742,7 +742,7 @@ impl Render for AndroidWindow {
         )
         .child(
             div()
-                .h(px(28.))
+                .h(px(36.))
                 .flex_shrink_0()
                 .w_full()
                 .px(px(10.))
@@ -750,7 +750,7 @@ impl Render for AndroidWindow {
                 .bg(rgb(colors.side))
                 .text_color(rgb(colors.muted))
                 .flex()
-                .gap(px(14.))
+                .gap(px(2.))
                 .items_center()
                 .child(
                     Button::new("android-back")
@@ -773,14 +773,15 @@ impl Render for AndroidWindow {
                         })),
                 )
                 .child(
-                    div()
-                        .id("keyboard-mode")
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(rgb(colors.text)))
-                        .child(if self.game_controls {
-                            "Keys: Game"
+                    Button::new("keyboard-mode")
+                        .small()
+                        .ghost()
+                        .px(px(5.))
+                        .tooltip("Switch between text input and game keys")
+                        .label(if self.game_controls {
+                            "Game keys"
                         } else {
-                            "Keys: Text"
+                            "Text input"
                         })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.reset();
@@ -790,11 +791,12 @@ impl Render for AndroidWindow {
                         })),
                 )
                 .child(
-                    div()
-                        .id("pointer-mode")
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(rgb(colors.text)))
-                        .child(if self.mouse_mode { "Mouse" } else { "Touch" })
+                    Button::new("pointer-mode")
+                        .small()
+                        .ghost()
+                        .px(px(5.))
+                        .tooltip("Switch between mouse and touch input")
+                        .label(if self.mouse_mode { "Mouse" } else { "Touch" })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.reset();
                             this.mouse_mode = !this.mouse_mode;
@@ -803,14 +805,24 @@ impl Render for AndroidWindow {
                         })),
                 )
                 .when(self.controller.is_some(), |row| {
-                    row.child("Controller connected")
+                    row.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .child("Controller connected"),
+                    )
                 })
-                .when_some(self.files.busy, |row, label| row.child(label))
+                .when_some(self.files.busy, |row, label| {
+                    row.child(div().flex_1().min_w_0().text_ellipsis().child(label))
+                })
                 .child(
-                    div()
-                        .id("mac-downloads")
-                        .cursor_pointer()
-                        .child(if self.files.latest.is_some() {
+                    Button::new("mac-downloads")
+                        .small()
+                        .ghost()
+                        .px(px(5.))
+                        .tooltip("Show downloads in Finder")
+                        .label(if self.files.latest.is_some() {
                             "Saved to Mac"
                         } else {
                             "Downloads"
