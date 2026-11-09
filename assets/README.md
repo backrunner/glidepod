@@ -14,4 +14,6 @@ References: [Icon Composer](https://developer.apple.com/icon-composer/), [creati
 
 Original artwork is licensed under Apache-2.0 with the project.
 
-The SwiftUI tray uses the same compiled app icon for its panel header and 20-point, full-color menu-bar item. The embedded background agent reads the enclosing desktop bundle's catalog/ICNS, while direct Cargo launches fall back to the existing `glidepod-icon-light.png` export. Keep this shared artwork instead of introducing an unrelated SF Symbol or template silhouette.
+The menu-bar item uses an 18-point monochrome template drawn in `trayStatusIcon()` in `crates/glidepod-macos/src/tray/Tray.swift`. Its two outlined package faces and foreground opening retain the app's identity at menu-bar size. AppKit renders the vector at the display's backing scale and supplies the tint for light, dark and selected states, following [Apple's menu-bar icon guidance](https://developer.apple.com/design/human-interface-guidelines/the-menu-bar#Menu-bar-extras). Keep its background and face interiors transparent.
+
+The SwiftUI panel header still uses the compiled app icon. The embedded background agent reads the enclosing desktop bundle's catalog/ICNS, while direct Cargo launches fall back to the existing `glidepod-icon-light.png` export.

@@ -13,10 +13,7 @@ final class GlidePodTray: NSObject, NSPopoverDelegate {
         super.init()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.item = item
-        let smallIcon = icon.copy() as! NSImage
-        smallIcon.size = NSSize(width: 20, height: 20)
-        smallIcon.isTemplate = false
-        item.button?.image = smallIcon
+        item.button?.image = trayStatusIcon()
         item.button?.setAccessibilityLabel("GlidePod")
         item.button?.target = self
         item.button?.action = #selector(toggle)
@@ -81,9 +78,54 @@ final class GlidePodTray: NSObject, NSPopoverDelegate {
 }
 
 @MainActor
+func trayStatusIcon() -> NSImage {
+    // A small vector version of the two package faces, without the app-icon
+    // background or glass effects. AppKit supplies the menu bar tint.
+    let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
+        func rotation(around center: NSPoint, degrees: CGFloat) -> AffineTransform {
+            var transform = AffineTransform()
+            transform.translate(x: center.x, y: center.y)
+            transform.rotate(byDegrees: degrees)
+            transform.translate(x: -center.x, y: -center.y)
+            return transform
+        }
+        let rear = NSBezierPath(roundedRect: NSRect(x: 2, y: 1.75, width: 10.5, height: 10.5),
+                                xRadius: 2.25, yRadius: 2.25)
+        rear.transform(using: rotation(around: NSPoint(x: 7.25, y: 7), degrees: -12))
+        NSColor.black.setStroke()
+        rear.lineWidth = 1.5
+        rear.stroke()
+
+        let frontRotation = rotation(around: NSPoint(x: 10.75, y: 11), degrees: 12)
+        let front = NSBezierPath(roundedRect: NSRect(x: 5.5, y: 5.75, width: 10.5, height: 10.5),
+                                 xRadius: 2.25, yRadius: 2.25)
+        front.transform(using: frontRotation)
+        // Knock out the hidden rear contour while keeping the face transparent.
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current?.compositingOperation = .clear
+        front.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        front.lineWidth = 1.5
+        front.stroke()
+
+        let slot = NSBezierPath()
+        slot.move(to: NSPoint(x: 8, y: 8.75))
+        slot.line(to: NSPoint(x: 11.75, y: 8.75))
+        slot.transform(using: frontRotation)
+        slot.lineWidth = 1.5
+        slot.lineCapStyle = .round
+        slot.stroke()
+        return true
+    }
+    image.isTemplate = true
+    image.accessibilityDescription = "GlidePod"
+    return image
+}
+
+@MainActor
 func trayIcon(fallback: Data, bundle: Bundle = .main) -> NSImage? {
-    // Prefer the exact layered application icon, with the complete ICNS as its
-    // compatibility fallback. Direct cargo runs use the same exported artwork.
+    // The panel header keeps the layered application icon, with the complete
+    // ICNS as its fallback. Direct cargo runs use the same exported artwork.
     var bundles = [bundle]
     // The windowless background agent lives in Contents/Library/LoginItems.
     // Read the desktop's catalog there too, without duplicating icon assets.

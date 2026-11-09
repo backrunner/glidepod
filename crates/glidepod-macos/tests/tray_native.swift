@@ -51,9 +51,10 @@ struct TrayNativeChecks {
         // transaction loop. Exercise show/close synchronously here.
         tray.popover.animates = false
         let button = tray.item!.button!
-        require(button.image != nil && !button.image!.isTemplate, "Branded color icon missing")
-        require(button.image!.size == NSSize(width: 20, height: 20), "Wrong status icon size")
-        require(button.image!.representations.contains { $0.pixelsWide >= 40 }, "No Retina icon")
+        require(button.image != nil && button.image!.isTemplate, "Adaptive status template missing")
+        require(button.image!.size == NSSize(width: 18, height: 18), "Wrong status icon size")
+        try checkStatusIcon(button.image!)
+        require(trayIcon(fallback: iconData)?.isTemplate == false, "Panel artwork became a template")
         require(tray.timer!.isValid && tray.popover.contentViewController != nil, "No SwiftUI host/timer")
         require(tray.model.snapshot == .unavailable, "Missing initial unavailable state")
 
@@ -119,7 +120,8 @@ struct TrayNativeChecks {
             }
             publish(try JSONSerialization.data(withJSONObject: fixture))
             tray.refresh()
-            try render(tray: tray, directory: URL(fileURLWithPath: CommandLine.arguments[2]))
+            try render(tray: tray, icon: trayIcon(fallback: iconData)!,
+                       directory: URL(fileURLWithPath: CommandLine.arguments[2]))
         }
         let timer = tray.timer!
         glidepodTrayShow(handle)
@@ -127,7 +129,37 @@ struct TrayNativeChecks {
         require(!timer.isValid && tray.item == nil, "Native teardown leaked timer/status item")
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         require(!tray.popover.isShown, "Deferred show reopened a disposed tray")
-        print("Passed: SwiftUI popup, branded Retina/background icon, bounded app icons, per-publisher expiry, keyboard selection, background publication, Unicode focus/open/quit, single drain, tracking refresh, disabled targets, malformed/stale/stopped states, bounded queue and teardown.")
+        print("Passed: SwiftUI popup, adaptive status template, branded panel/background icon, bounded app icons, per-publisher expiry, keyboard selection, background publication, Unicode focus/open/quit, single drain, tracking refresh, disabled targets, malformed/stale/stopped states, bounded queue and teardown.")
+    }
+
+    @MainActor
+    static func checkStatusIcon(_ image: NSImage) throws {
+        // Render the vector at each backing scale and catch a blank image,
+        // opaque app-icon tile, or clipped contour.
+        for scale in 1...3 {
+            let pixels = 18 * scale
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
+                                          bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                          isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+            NSGraphicsContext.current!.cgContext.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
+            image.draw(in: NSRect(x: 0, y: 0, width: 18, height: 18))
+            NSGraphicsContext.restoreGraphicsState()
+            var coverage: CGFloat = 0
+            for y in 0..<pixels {
+                for x in 0..<pixels {
+                    let color = bitmap.colorAt(x: x, y: y)!
+                    coverage += color.alphaComponent
+                    if x == 0 || y == 0 || x == pixels - 1 || y == pixels - 1 {
+                        // Antialiasing may reach the edge; a solid stroke must not.
+                        require(color.alphaComponent < 0.9, "Status contour clipped at \(scale)x")
+                    }
+                }
+            }
+            let fraction = coverage / CGFloat(pixels * pixels)
+            require((0.15...0.5).contains(fraction), "Status icon is blank or has an opaque background")
+        }
     }
 
     static func checkFreshness() {
@@ -186,7 +218,7 @@ struct TrayNativeChecks {
     }
 
     @MainActor
-    static func render(tray: GlidePodTray, directory: URL) throws {
+    static func render(tray: GlidePodTray, icon: NSImage, directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 336, height: 360),
                               styleMask: [.borderless], backing: .buffered, defer: false)
@@ -194,6 +226,28 @@ struct TrayNativeChecks {
         let appearances: [(String, NSAppearance.Name)] = [
             ("light", .aqua), ("dark", .darkAqua), ("long-light", .aqua), ("long-dark", .darkAqua),
         ]
+        for (name, appearance) in appearances.prefix(2) {
+            // An AppKit-hosted template preview, not a desktop menu-bar capture.
+            let strip = HStack(spacing: 16) {
+                Image(nsImage: tray.item!.button!.image!)
+                Image(systemName: "wifi")
+                Image(systemName: "speaker.wave.2")
+            }
+            .font(.system(size: 16, weight: .medium))
+            .frame(width: 132, height: 28)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .environment(\.colorScheme, appearance == .darkAqua ? .dark : .light)
+            let host = NSHostingController(rootView: strip)
+            window.contentViewController = host
+            window.appearance = NSAppearance(named: appearance)
+            window.setContentSize(host.view.fittingSize)
+            window.orderFront(nil)
+            host.view.layoutSubtreeIfNeeded()
+            let bitmap = host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds)!
+            host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])!
+                .write(to: directory.appendingPathComponent("status-\(name).png"))
+        }
         for (name, appearance) in appearances {
             var snapshot = original
             if name.hasPrefix("long") {
@@ -208,7 +262,7 @@ struct TrayNativeChecks {
             tray.model.refresh(snapshot, preservingApps: false)
             // A fresh host outside NSPopover avoids caching vibrancy masks as
             // colors; use an opaque native window background for these exports.
-            let panel = TrayPanel(model: tray.model, icon: tray.item!.button!.image!, select: { _ in }, dismiss: {})
+            let panel = TrayPanel(model: tray.model, icon: icon, select: { _ in }, dismiss: {})
                 .background(Color(nsColor: .windowBackgroundColor))
                 .environment(\.colorScheme, appearance == .darkAqua ? .dark : .light)
             let host = NSHostingController(rootView: panel)
